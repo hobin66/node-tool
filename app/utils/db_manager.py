@@ -1,7 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
-# 🚨 [修改] 引入 text 用于执行原生 SQL，引入 IntegrityError 用于捕获主键冲突
 from sqlalchemy import desc, func, case, BigInteger, literal_column, text
 from sqlalchemy.exc import IntegrityError
 from flask_login import UserMixin
@@ -376,7 +375,7 @@ def add_history_snapshot(uuid, total_up, total_down, cpu):
         db.session.rollback()
         print(f"Error adding history: {e}")
 
-# 🚨 [关键修复] 增强版批量写入函数
+# 增强版批量写入函数
 def bulk_add_history(records_list):
     """
     [写] 批量写入历史数据。

@@ -3,7 +3,7 @@
 
 NAT小鸡推荐！！！**[独角鲸NAT](https://fuckip.me)** 价格亲民的高性价比VPS服务
 
-7折优惠码：nodetool-70
+7折优惠码：NODETOOL-70
 
 ---
 

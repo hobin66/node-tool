@@ -9,21 +9,21 @@ import json
 import requests
 from sqlalchemy import create_engine, text
 
-# 🚨 修改：区分数据库类型的估算常数
-# SQLite 结构较紧凑，每条记录约 120 字节
+# 区分数据库类型的估算常数
+# SQLite 结构较紧凑，每条记录约 200 字节
 EST_BYTES_PER_RECORD_SQLITE = 200
-# PostgreSQL 包含 HeapTupleHeader(23B)、页对齐填充及索引开销，约 200 字节
-EST_BYTES_PER_RECORD_PSQL = 240 
+# PostgreSQL 包含 HeapTupleHeader(23B)、页对齐填充及索引开销，约 250 字节
+EST_BYTES_PER_RECORD_PSQL = 250 
 
 # 一天的总分钟数
 MINUTES_PER_DAY = 24 * 60 
 
-# 🚨 辅助函数：获取 db_config.json 的绝对路径
+# 获取 db_config.json 的绝对路径
 def get_db_config_path():
     # 获取 db_config.json 的路径
     return os.path.join(current_app.root_path, '..', 'db_config.json')
 
-# 🚨 辅助函数：读取数据库配置文件
+# 读取数据库配置文件
 def load_db_config_file():
     # 读取数据库配置文件
     config_path = get_db_config_path()
@@ -42,7 +42,7 @@ def load_db_config_file():
         print(f"Error reading db_config.json: {e}")
     return default_config
 
-# 🚨 辅助函数：写入数据库配置文件
+# 写入数据库配置文件
 def save_db_config_file(config_data):
     # 写入数据库配置文件
     config_path = get_db_config_path()
@@ -54,7 +54,7 @@ def save_db_config_file(config_data):
         print(f"Error writing db_config.json: {e}")
         return False
 
-# 🚨 新增：通用 API URL 连通性测试接口
+# 通用 API URL 连通性测试接口
 @settings_bp.route('/test_general_api_connectivity', methods=['POST'])
 @login_required
 def test_general_api_connectivity():
@@ -123,7 +123,6 @@ def general_settings():
                     set_config(key, cleaned_value)
 
         flash('通用系统设置已保存', 'success')
-        # 🚨 修复：在保存配置后，重新读取最新的配置以确保后续的 GET 请求或页面渲染能拿到新值
         return redirect(url_for('settings.general_settings'))
 
     # === 处理页面显示 (GET) ===
@@ -131,7 +130,6 @@ def general_settings():
     config_items = []
     acquisition_interval = 15
     
-    # 🚨 修复Bug：使用最新的配置值来构建 config_items 列表，确保所有配置项都能正确显示当前值
     for config in all_configs:
         key = config.key
         
@@ -144,7 +142,7 @@ def general_settings():
             except (ValueError, TypeError):
                 acquisition_interval = 15 
         
-        # 🚨 核心修改：将所有字段的 input_type 强制设置为 'text'
+        # 核心修改：将所有字段的 input_type 强制设置为 'text'
         input_type = 'text' 
         
         # 移除所有类型判断，所有字段（包括采集间隔）在前端都将是 text 类型。
@@ -165,7 +163,7 @@ def general_settings():
         
     total_records_per_day = total_nodes * acquisitions_per_day
     
-    # 🚨 优化逻辑：根据当前运行的数据库类型选择估算因子
+    # 根据当前运行的数据库类型选择估算因子
     current_db_uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
     if 'postgresql' in current_db_uri:
         bytes_per_record = EST_BYTES_PER_RECORD_PSQL
@@ -195,7 +193,7 @@ def general_settings():
                            storage_stats=storage_stats,
                            db_config=current_db_config)
 
-# 🚨 新增：测试数据库连接的 API
+# 测试数据库连接的 API
 @settings_bp.route('/test_db_connection', methods=['POST'])
 @login_required
 def test_db_connection_api():
@@ -228,7 +226,7 @@ def test_db_connection_api():
         elif 'Connection refused' in error_msg: error_msg = "连接被拒绝 (请检查主机和端口)"
         return jsonify({'status': 'error', 'message': f'❌ 连接失败: {error_msg}'})
 
-# 🚨 修改：保存配置前增加强制检测
+# 保存配置前增加强制检测
 @settings_bp.route('/save_db_settings', methods=['POST'])
 @login_required
 def save_database_settings():

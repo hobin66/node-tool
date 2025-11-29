@@ -34,6 +34,10 @@ curl -fsSL https://raw.githubusercontent.com/hobin02130/node-tool/main/install.s
 
 ###  🚀 Docker化安装
 
+- 注意不能直接使用   本地文件夹:/app  这种映射方式
+- 必须一对一映射文件或文件夹
+- 文件：db_config.json app.db
+- 文件夹：nodes 
 
 ```bash
 docker run -d \

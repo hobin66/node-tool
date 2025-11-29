@@ -6,55 +6,55 @@ import platform
 import zipfile
 
 # ---------------------------------------------------------
-# 配置区域
+# Configuration Area
 # ---------------------------------------------------------
-PROJECT_NAME = "NodeTool"  # 生成的 exe/二进制文件名
-SPEC_FILE = "node_tool.spec"  # PyInstaller 配置文件
+PROJECT_NAME = "NodeTool"  # Generated exe/binary name
+SPEC_FILE = "node_tool.spec"  # PyInstaller spec file
 DIST_DIR = "dist"
 BUILD_DIR = "build"
-RELEASE_DIR = "release"  # 最终发布的文件夹
+RELEASE_DIR = "release"  # Final release directory
 
-# 需要复制到发布目录的外部资源
-# 格式: (源路径, 目标文件夹名)
+# External assets to copy to the release directory
+# Format: (Source Path, Destination Folder Name)
 EXTERNAL_ASSETS = [
-    # (源路径, 目标路径: 空字符串代表根目录)
-    ("app/subscription/nodes", "nodes"),  # 复制 nodes 文件夹
-    ("db_config.json", ""),      # 复制数据库配置(如果存在)
-    ("app.db", ""),              # 复制数据库(如果存在, 可选)
+    # (Source, Destination: empty string means root)
+    ("app/subscription/nodes", "nodes"),  # Copy nodes folder
+    ("db_config.json", ""),      # Copy db config if exists
+    ("app.db", ""),              # Copy database if exists (optional)
 ]
 
 def clean_dirs():
-    """清理构建产生的临时文件夹"""
-    print(f"[Clean] 清理旧的构建文件...")
+    """Clean up temporary build directories"""
+    print(f"[Clean] Cleaning up old build files...")
     for d in [DIST_DIR, BUILD_DIR, RELEASE_DIR]:
         if os.path.exists(d):
             shutil.rmtree(d, ignore_errors=True)
 
 def run_pyinstaller():
-    """运行 PyInstaller"""
-    print(f"[Build] 开始使用 PyInstaller 打包 ({platform.system()})...")
+    """Run PyInstaller"""
+    print(f"[Build] Starting PyInstaller build ({platform.system()})...")
     
-    # 检查 spec 文件是否存在
+    # Check if spec file exists
     if not os.path.exists(SPEC_FILE):
-        print(f"[Error] 错误: 找不到 {SPEC_FILE}，请先生成 spec 文件。")
+        print(f"[Error] Error: {SPEC_FILE} not found. Please generate the spec file first.")
         sys.exit(1)
 
-    # 运行 PyInstaller 命令
+    # Run PyInstaller command
     try:
         subprocess.check_call([sys.executable, "-m", "PyInstaller", SPEC_FILE, "--clean", "-y"])
-        print("[Success] PyInstaller 打包完成")
+        print("[Success] PyInstaller build completed")
     except subprocess.CalledProcessError:
-        print("[Error] PyInstaller 打包失败")
+        print("[Error] PyInstaller build failed")
         sys.exit(1)
 
 def organize_release():
-    """整理发布文件夹：复制 exe 和外部资源"""
-    print(f"[Organize] 正在整理发布文件到 '{RELEASE_DIR}'...")
+    """Organize release folder: copy exe and external assets"""
+    print(f"[Organize] Organizing release files to '{RELEASE_DIR}'...")
     
     if not os.path.exists(RELEASE_DIR):
         os.makedirs(RELEASE_DIR)
 
-    # 1. 确定生成的可执行文件名字
+    # 1. Determine the executable name
     system_name = platform.system()
     exe_name = f"{PROJECT_NAME}.exe" if system_name == "Windows" else PROJECT_NAME
     
@@ -62,50 +62,50 @@ def organize_release():
     dst_exe = os.path.join(RELEASE_DIR, exe_name)
 
     if not os.path.exists(src_exe):
-        print(f"[Error] 错误: 在 dist 目录找不到生成的文件: {src_exe}")
+        print(f"[Error] Error: Generated file not found in dist: {src_exe}")
         sys.exit(1)
 
-    # 2. 移动可执行文件
+    # 2. Move executable
     shutil.copy2(src_exe, dst_exe)
-    print(f"   -> 已复制程序: {exe_name}")
+    print(f"   -> Copied executable: {exe_name}")
 
-    # 3. 复制外部资源 (nodes 文件夹等)
+    # 3. Copy external assets (nodes folder, etc.)
     for src, dst_folder in EXTERNAL_ASSETS:
-        # 构建完整源路径
+        # Check if source exists
         if not os.path.exists(src):
-            print(f"   [Warning] 警告: 资源未找到，跳过: {src}")
+            print(f"   [Warning] Warning: Asset not found, skipping: {src}")
             continue
 
         final_dst = os.path.join(RELEASE_DIR, dst_folder)
         
         if os.path.isdir(src):
-            # 如果是文件夹 (如 nodes)
+            # If it's a directory
             if os.path.exists(final_dst):
                 shutil.rmtree(final_dst)
             shutil.copytree(src, final_dst)
-            print(f"   -> 已复制文件夹: {src} -> {dst_folder}/")
+            print(f"   -> Copied folder: {src} -> {dst_folder}/")
         else:
-            # 如果是文件
+            # If it's a file
             shutil.copy2(src, final_dst)
-            print(f"   -> 已复制文件: {src}")
+            print(f"   -> Copied file: {src}")
 
-    # 4. 如果是 Linux，赋予执行权限
+    # 4. Set execution permissions for Linux
     if system_name != "Windows":
         os.chmod(dst_exe, 0o755)
 
 def make_archive():
-    """压缩发布文件夹"""
-    print("[Compress] 正在创建压缩包...")
+    """Create archive for release"""
+    print("[Compress] Creating archive...")
     
-    # 架构名称 (例如 amd64, arm64, win32)
+    # Architecture name (e.g., amd64, arm64, win32)
     arch = platform.machine().lower()
     os_name = platform.system().lower()
     zip_name = f"{PROJECT_NAME}_{os_name}_{arch}.zip"
     
-    # 切换目录以便压缩包内的路径整洁
+    # Change directory to make the archive path clean
     shutil.make_archive(os.path.join(".", zip_name.replace('.zip', '')), 'zip', RELEASE_DIR)
     
-    print(f"[Done] 打包成功! 文件位于: {os.path.abspath(zip_name)}")
+    print(f"[Done] Build successful! File located at: {os.path.abspath(zip_name)}")
 
 if __name__ == "__main__":
     clean_dirs()

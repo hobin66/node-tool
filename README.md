@@ -11,7 +11,7 @@ NAT小鸡推荐！！！**[独角鲸NAT](https://fuckip.me)** 价格亲民的高
 
 我们要展示的不仅仅是代码，更是实际的效果。您可以点击下方链接体验：
 
- **[演示网站-1](http://204.197.161.164:50012)**
+ **[演示站点 v1.0.0 ](http://204.197.161.164:50012)**
 
 演示服务器位于US，配置一般，打开和反应速度不会很快
 
@@ -28,7 +28,7 @@ NAT小鸡推荐！！！**[独角鲸NAT](https://fuckip.me)** 价格亲民的高
 支持amd和arm架构，支持docker环境，安装完成后可使用 nt 命令打开快捷面板。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hobin02130/node-tool/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+curl -fsSL https://raw.githubusercontent.com/Hobin66/node-tool/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
 ```
 ---
 
@@ -87,7 +87,8 @@ services:
 * **自定义规则列表**: 模板内置有mihomo官方分流规则，且添加直连和自定义代理节点分流规则。
 * **部署简单**: 可直接二进制文件启动
 * **多端支持**: 完美win、linux及多架构。
-* **Docker**: 计划支持
+* **支持docker容器**: 甚至能在NAT小鸡运行哦
+* **Docker**: 支持docker安装
 
 ---
 

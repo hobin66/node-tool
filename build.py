@@ -40,10 +40,25 @@ def run_pyinstaller():
         print(f"[Error] Error: {SPEC_FILE} not found. Please generate the spec file first.", flush=True)
         sys.exit(1)
 
+    # 🟢 [修改] 自动修改 .spec 文件以禁用 UPX
+    # 因为不能在命令行传 --noupx，我们直接修改文件内容
+    try:
+        with open(SPEC_FILE, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # 如果发现开启了 UPX，就把它关掉
+        if "upx=True" in content:
+            print("[Config] Disabling UPX in spec file to avoid antivirus false positives...", flush=True)
+            content = content.replace("upx=True", "upx=False")
+            with open(SPEC_FILE, 'w', encoding='utf-8') as f:
+                f.write(content)
+    except Exception as e:
+        print(f"[Warning] Failed to edit spec file: {e}", flush=True)
+
     # Run PyInstaller command
     try:
-        # 🟢 [修改] 添加 --noupx 参数，防止 Windows Defender 误删生成的 exe
-        subprocess.check_call([sys.executable, "-m", "PyInstaller", SPEC_FILE, "--clean", "-y", "--noupx"])
+        # 🟢 [修改] 移除了 --noupx 参数，因为我们已经修改了 spec 文件
+        subprocess.check_call([sys.executable, "-m", "PyInstaller", SPEC_FILE, "--clean", "-y"])
         print("[Success] PyInstaller build completed", flush=True)
     except subprocess.CalledProcessError:
         print("[Error] PyInstaller build failed", flush=True)

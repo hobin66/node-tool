@@ -25,7 +25,7 @@ bp = Blueprint('subscription', __name__, url_prefix='/subscription', template_fo
 # ---------------------------------------------------------
 def check_and_restore_templates(target_dir):
     """
-    🟢 [新增] 自愈功能：检查外部目录是否缺失模板文件，如果缺失则从 exe 内部恢复
+    自愈功能：检查外部目录是否缺失模板文件，如果缺失则从 exe 内部恢复
     """
     # 仅在打包环境 (Frozen) 下执行恢复逻辑
     # 开发环境下 sys.frozen 为 False，直接使用源码文件，不需要恢复

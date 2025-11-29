@@ -23,18 +23,12 @@ NAT小鸡推荐！！！**[独角鲸NAT](https://fuckip.me)** 价格亲民的高
 
 ### 🚀 linux自动化安装
 
-amd架构
+支持amd和arm架构
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hobin02130/node-tool/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh https://github.com/hobin02130/node-tool/releases/download/v1.0.1/NodeTool-Linux-amd64.zip
+curl -fsSL https://raw.githubusercontent.com/hobin02130/node-tool/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh
 ```
 ---
-
-arm架构
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/hobin02130/node-tool/main/install.sh -o install.sh && chmod +x install.sh && ./install.sh https://github.com/hobin02130/node-tool/releases/download/v1.0.1/NodeTool-Linux-arm64.zip
-```
 
 ---
 

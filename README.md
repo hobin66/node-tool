@@ -43,7 +43,6 @@
 请复制以下命令，在您的终端中执行。
 
 ```bash
-# 下载安装脚本并赋予执行权限，然后运行安装，同时指定程序包的下载地址。
 curl -O https://github.com/hobin02130/node-tool/blob/main/install.sh \
   && chmod +x install.sh \
   && ./install.sh https://github.com/hobin02130/node-tool/releases/download/v1.0.0/NodeTool-Linux-amd64.zip

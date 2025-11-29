@@ -34,7 +34,7 @@
 
 ### 安装步骤
 
-
+安装：curl -O https://github.com/hobin02130/node-tool/blob/main/install.sh && chmod +x install.sh && ./install.sh https://github.com/hobin02130/node-tool/releases/download/v1.0.0/NodeTool-Linux-amd64.zip
 访问 `http://localhost:5000` 即可看到运行效果。
 
 ---

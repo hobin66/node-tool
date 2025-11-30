@@ -209,7 +209,7 @@
 
     <div class="summary-grid">
         <div class="summary-card">
-            <div class="summary-header"><p>总节点数量</p><span class="summary-icon color-blue">N</span></div>
+            <div class="summary-header"><p>总服务器节点数量</p><span class="summary-icon color-blue">N</span></div>
             <div class="summary-center-box">
                 <h4 style="margin-top: -25px;">{{ summary.total_nodes | default(0) }}</h4>
             </div>
@@ -221,7 +221,7 @@
         {% set total_limit_bytes = summary.total_traffic_limit | default(0) %}
         {% set total_consumed_bytes = summary.total_consumed_traffic | default(0) %}
         <div class="summary-card">
-            <div class="summary-header"><p>所有节点总消耗流量</p><span class="summary-icon color-green">∑</span></div>
+            <div class="summary-header"><p>所有服务器总消耗流量</p><span class="summary-icon color-green">∑</span></div>
             
             <div class="traffic-card-content">
                 {% set total_limit_gb = (total_limit_bytes / 1024 / 1024 / 1024) | round(2) %}
@@ -264,9 +264,9 @@
     </div>
 
     <div class="nodes-header-row">
-        <h3 style="margin: 0;">节点详细状态 ({{ nodes|length }})</h3>
+        <h3 style="margin: 0;">服务器详细状态 ({{ nodes|length }})</h3>
         <button id="refreshBtn" class="btn btn-primary" style="width: auto; background-color: #007aff; border-color: #007aff; padding: 6px 16px; font-size: 14px;">
-            立即刷新数据
+            获取最新数据
         </button>
     </div>
 

@@ -14,8 +14,6 @@ PORT_HY2_FIXED=51813
 PORT_TUIC_FIXED=51814
 # =========================================================
 # 如果不懂请勿对下面代码进行任何修改以防出错！！！
-# 如果不懂请勿对下面代码进行任何修改以防出错！！！
-# 如果不懂请勿对下面代码进行任何修改以防出错！！！
 # =========================================================
 # -----------------------
 # 初始化变量
@@ -403,7 +401,8 @@ setup_service
 
 # -----------------------
 # 输出与上报逻辑
-get_public_ip() { curl -s --max-time 5 "https://api.ipify.org" || echo "YOUR_SERVER_IP"; }
+# 使用 api64.ipify.org 以支持双栈环境获取 IP
+get_public_ip() { curl -s --max-time 5 "https://api64.ipify.org" || echo "YOUR_SERVER_IP"; }
 PUB_IP=$(get_public_ip)
 
 report_node() {
@@ -418,6 +417,12 @@ report_node() {
 
 print_info() {
     local host="$PUB_IP"
+
+    # 如果 IP 包含冒号（即 IPv6），则加上方括号 []
+    if [[ "$host" == *":"* ]]; then
+        host="[$host]"
+    fi
+
     echo ""
     info "📜 节点链接列表:"
     echo ""
@@ -426,28 +431,24 @@ print_info() {
         local ss_info="2022-blake3-aes-128-gcm:${PSK_SS}"
         local ss_b64=$(printf "%s" "$ss_info" | base64 | tr -d '\n')
         local link="ss://${ss_b64}@${host}:${PORT_SS}#ss${suffix}"
-        # 【修改点】去除协议前缀 [SS]
         echo "   $link"
         report_node "ss" "$link"
     fi
     
     if $ENABLE_HY2; then
         local link="hy2://${PSK_HY2}@${host}:${PORT_HY2}/?sni=www.bing.com&alpn=h3&insecure=1#hy2${suffix}"
-        # 【修改点】去除协议前缀 [HY2]
         echo "   $link"
         report_node "hy2" "$link"
     fi
 
     if $ENABLE_TUIC; then
         local link="tuic://${UUID_TUIC}:${PSK_TUIC}@${host}:${PORT_TUIC}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#tuic${suffix}"
-        # 【修改点】去除协议前缀 [TUIC]
         echo "   $link"
         report_node "tuic" "$link"
     fi
     
     if $ENABLE_REALITY; then
         local link="vless://${UUID}@${host}:${PORT_REALITY}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=learn.microsoft.com&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality${suffix}"
-        # 【修改点】去除协议前缀 [VLESS]
         echo "   $link"
         report_node "vless" "$link"
     fi
@@ -488,7 +489,13 @@ show_links() {
     if [ -f "$CACHE_FILE" ]; then
         source "$CACHE_FILE"
         suffix=$(cat /root/node_names.txt 2>/dev/null || echo "")
-        PUB_IP=$(curl -s --max-time 5 "https://api.ipify.org" || echo "YOUR_SERVER_IP")
+        # 使用 api64.ipify.org
+        PUB_IP=$(curl -s --max-time 5 "https://api64.ipify.org" || echo "YOUR_SERVER_IP")
+        
+        # IPv6 自动添加方括号
+        if [[ "$PUB_IP" == *":"* ]]; then
+            PUB_IP="[$PUB_IP]"
+        fi
         
         echo ""
         info "📜 节点链接列表:"
@@ -512,7 +519,6 @@ show_links() {
         fi
         
         if [ "${ENABLE_REALITY:-false}" = "true" ]; then
-            # 注意：这里 VLESS SNI 默认使用 learn.microsoft.com
             echo "vless://${UUID}@${PUB_IP}:${PORT_REALITY}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=learn.microsoft.com&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality${suffix}"
             echo ""
         fi

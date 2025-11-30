@@ -241,15 +241,16 @@ def sync_nodes_to_files():
                 # 增加对 'sub' (外部订阅) 的判断，显示云朵图标
                 if origin == 'db':
                     flag = get_emoji_flag(region)
+                    name_prefix = f"{proto.lower()}-"   # DB 节点必须带协议前缀
                 elif origin == 'sub':
                     flag = ''  # 外部订阅不显示国旗或标志，保留原始名称
+                    name_prefix = ""    # 外部订阅节点：不带任何前缀
                 else:
                     flag = '📝' # 本地手填标志
+                    name_prefix = f"{proto.lower()}-"
                 
                 # 2. 构造强制名称：Flag Protocol-Name (例如: 🇸🇬 hy2-SG-NAT1)
-                # proto.lower() 确保协议名为小写
-                # 外部订阅节点不强制添加前缀
-                display_name = f"{flag} {proto.lower()}-{node_name}".strip()
+                display_name = f"{flag} {name_prefix}{node_name}".strip()
                 
                 # 3. 调用解析器
                 # 注意：虽然传入了 display_name，但解析器可能会优先读取 link 中的 #hash
@@ -824,19 +825,20 @@ def download_v2ray_base64():
         region = node.get('region', 'LOC')
         
         # 增加对类型的图标判断
-        if origin == 'db':
-            flag = get_emoji_flag(region)
-        elif origin == 'sub':
-            flag = '' # 外部订阅不显示国旗或标志
-        else:
-            flag = '📝'
-        
+        flag = get_emoji_flag(region) if origin == 'db' else ('📝' if origin == 'local' else '')
         for proto, link in links_dict.items():
             if link and link.strip():
+                # 2. 计算 name_prefix (在协议循环内，使用当前的 proto)
+                name_prefix = ""
+                if origin == 'db' or origin == 'local':
+                    # 只有 DB 和 Local 节点需要协议前缀
+                    name_prefix = f"{proto.lower()}-"
+                # origin == 'sub' 时，name_prefix 保持空字符串
+                
                 link = fix_link_ipv6(link) # 提高对ipv6的兼容性
-                # --- [修改开始] 命名格式调整: 国旗 hy2-名称 ---
-                full_name = f"{flag} {proto}-{name}".strip()
-                # --- [修改结束] ---
+                
+                # 3. 构造最终名称
+                full_name = f"{flag} {name_prefix}{name}".strip()
                 
                 safe_name = urllib.parse.quote(full_name)
                 if '#' in link: link = link.split('#')[0]

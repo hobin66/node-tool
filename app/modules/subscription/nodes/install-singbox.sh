@@ -1,275 +1,517 @@
 #!/usr/bin/env bash
-# [重要] 移除 set -e，防止在 Systemd 不完整的 VPS 上因为 reload 失败导致脚本直接退出
-# set -euo pipefail 
+set -euo pipefail
 
-# =========================================================
-# 基础配置区 (在此处修改默认端口)
-# =========================================================
-# VLESS Reality 端口
-PORT_REALITY_FIXED=51811
+# ==========================================
+# [用户配置区] -在此处定义固定的端口
+# ==========================================
 # Shadowsocks 端口
-PORT_SS_FIXED=51812
+FIXED_PORT_SS=10001
 # Hysteria2 端口
-PORT_HY2_FIXED=51813
+FIXED_PORT_HY2=10002
 # TUIC 端口
-PORT_TUIC_FIXED=51814
-# =========================================================
-
-# -----------------------
-# 初始化变量
-# -----------------------
-PORT_SS=""
-PORT_HY2=""
-PORT_TUIC=""
-PORT_REALITY=""
-PSK_SS=""
-PSK_HY2=""
-PSK_TUIC=""
-UUID_TUIC=""
-UUID=""
-REALITY_PK=""
-REALITY_PUB=""
-REALITY_SID=""
-REPORT_URL="" 
-
+FIXED_PORT_TUIC=10003
+# VLESS Reality 端口
+FIXED_PORT_REALITY=10004
+# Reality 目标域名 (SNI) - 用于伪装
+FIXED_REALITY_SNI="learn.microsoft.com"
+# Shadowsocks 加密方式
+# 常用推荐: 2022-blake3-aes-128-gcm (性能最好), aes-128-gcm (兼容性好)
+FIXED_SS_METHOD="2022-blake3-aes-128-gcm"
+# ==========================================
+# 自动上报地址 (默认为空，由命令行参数 --report 传入)
+REPORT_URL=""
 # -----------------------
 # 彩色输出函数
-# -----------------------
 info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }
 warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
 err()  { echo -e "\033[1;31m[ERR]\033[0m $*" >&2; }
 
 # -----------------------
-# 参数解析
-# -----------------------
-ENABLE_SS=false
-ENABLE_HY2=false
-ENABLE_TUIC=false
-ENABLE_REALITY=false
-PROTOCOL_SELECTED=false 
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        shadowsocks|ss) 
-            ENABLE_SS=true; PROTOCOL_SELECTED=true; shift ;;
-        hysteria2|hy2)  
-            ENABLE_HY2=true; PROTOCOL_SELECTED=true; shift ;;
-        tuic)           
-            ENABLE_TUIC=true; PROTOCOL_SELECTED=true; shift ;;
-        vless|reality)  
-            ENABLE_REALITY=true; PROTOCOL_SELECTED=true; shift ;;
-        --report)
-            if [[ -n "${2:-}" ]]; then
-                REPORT_URL="$2"; shift 2
-            else
-                err "--report 参数需要提供 URL"; exit 1
-            fi ;;
-        *) shift ;;
-    esac
-done
-
-if [ "$PROTOCOL_SELECTED" = false ]; then
-    info "未指定具体协议，默认安装所有协议..."
-    ENABLE_SS=true
-    ENABLE_HY2=true
-    ENABLE_TUIC=true
-    ENABLE_REALITY=true
-fi
-
-# -----------------------
 # 检测系统类型
-# -----------------------
 detect_os() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         OS_ID="${ID:-}"
         OS_ID_LIKE="${ID_LIKE:-}"
     else
-        OS_ID=""; OS_ID_LIKE=""
+        OS_ID=""
+        OS_ID_LIKE=""
     fi
 
     if echo "$OS_ID $OS_ID_LIKE" | grep -qi "alpine"; then
         OS="alpine"
-    elif echo "$OS_ID $OS_ID_LIKE" | grep -Ei "debian|ubuntu"; then
+    elif echo "$OS_ID $OS_ID_LIKE" | grep -Ei "debian|ubuntu" >/dev/null; then
         OS="debian"
-    elif echo "$OS_ID $OS_ID_LIKE" | grep -Ei "centos|rhel|fedora"; then
+    elif echo "$OS_ID $OS_ID_LIKE" | grep -Ei "centos|rhel|fedora" >/dev/null; then
         OS="redhat"
     else
         OS="unknown"
     fi
 }
-detect_os
 
-if [ "$(id -u)" != "0" ]; then err "此脚本需要 root 权限"; exit 1; fi
+detect_os
+info "检测到系统: $OS (${OS_ID:-unknown})"
+
+# -----------------------
+# 检查 root 权限
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        err "此脚本需要 root 权限"
+        err "请使用: sudo bash -c \"\$(curl -fsSL ...)\" 或切换到 root 用户"
+        exit 1
+    fi
+}
+
+check_root
 
 # -----------------------
 # 安装依赖
-# -----------------------
 install_deps() {
     info "安装系统依赖..."
+    
     case "$OS" in
         alpine)
-            apk update || true
-            apk add --no-cache bash curl ca-certificates openssl openrc jq grep procps coreutils || { err "依赖安装失败"; exit 1; }
+            apk update || { err "apk update 失败"; exit 1; }
+            apk add --no-cache bash curl ca-certificates openssl openrc jq || {
+                err "依赖安装失败"
+                exit 1
+            }
             ;;
         debian)
             export DEBIAN_FRONTEND=noninteractive
-            apt-get update -y || true
-            # 增加 procps(pgrep) 和 coreutils(nohup) 确保兜底机制可用
-            apt-get install -y curl ca-certificates openssl jq grep procps coreutils || { err "依赖安装失败"; exit 1; }
+            apt-get update -y || { err "apt update 失败"; exit 1; }
+            apt-get install -y curl ca-certificates openssl jq || {
+                err "依赖安装失败"
+                exit 1
+            }
             ;;
         redhat)
-            yum install -y curl ca-certificates openssl jq grep procps coreutils || { err "依赖安装失败"; exit 1; }
+            yum install -y curl ca-certificates openssl jq || {
+                err "依赖安装失败"
+                exit 1
+            }
+            ;;
+        *)
+            warn "未识别的系统类型,尝试继续..."
             ;;
     esac
+    
+    info "依赖安装完成"
 }
+
 install_deps
 
 # -----------------------
-# 工具函数 (密钥生成)
-# -----------------------
-rand_ss_key() {
-    openssl rand -base64 16 2>/dev/null | tr -d '\n\r' || head -c 16 /dev/urandom | base64 | tr -d '\n\r'
+# 工具函数
+# 生成随机端口
+rand_port() {
+    local port
+    port=$(shuf -i 10000-60000 -n 1 2>/dev/null) || port=$((RANDOM % 50001 + 10000))
+    echo "$port"
 }
 
-rand_pass_safe() {
-    head -c 500 /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 16
+# 生成随机密码
+rand_pass() {
+    local pass
+    pass=$(openssl rand -base64 16 2>/dev/null | tr -d '\n\r') || pass=$(head -c 16 /dev/urandom | base64 2>/dev/null | tr -d '\n\r')
+    echo "$pass"
 }
 
+# 生成UUID
 rand_uuid() {
-    if [ -f /proc/sys/kernel/random/uuid ]; then cat /proc/sys/kernel/random/uuid; else
-        openssl rand -hex 16 | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1\2\3\4-\5\6-\7\8-\9\10-\11\12\13\14\15\16/'
+    local uuid
+    if [ -f /proc/sys/kernel/random/uuid ]; then
+        uuid=$(cat /proc/sys/kernel/random/uuid)
+    else
+        uuid=$(openssl rand -hex 16 | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1\2\3\4-\5\6-\7\8-\9\10-\11\12\13\14\15\16/')
     fi
+    echo "$uuid"
 }
 
 # -----------------------
-# 设置主机名后缀
-# -----------------------
-HOST_NAME=$(hostname)
-# 过滤掉不安全字符，防止报错
-SAFE_HOST_NAME=$(echo "$HOST_NAME" | tr -cd 'a-zA-Z0-9_-')
-if [[ -n "$SAFE_HOST_NAME" ]]; then suffix="-${SAFE_HOST_NAME}"; else suffix=""; fi
-echo "$suffix" > /root/node_names.txt
-info "节点名称后缀已设置为: $suffix"
+# 配置节点名称后缀 (自动获取主机名)
+# 直接获取机器 hostname
+user_name=$(hostname)
+
+if [[ -n "$user_name" ]]; then
+    suffix="-${user_name}"
+    # 将后缀写入文件，供 sb 管理脚本读取
+    echo "$suffix" > /root/node_names.txt
+else
+    suffix=""
+    rm -f /root/node_names.txt 2>/dev/null
+fi
+
+info "节点名称后缀已自动设置为: $suffix"
 
 # -----------------------
-# 生成变量配置
-# -----------------------
-export ENABLE_SS ENABLE_HY2 ENABLE_TUIC ENABLE_REALITY
-
-get_config() {
-    info "正在生成配置信息..."
+# 选择要部署的协议 (修改版：支持 --report 参数)
+select_protocols() {
+    # 初始化变量
+    ENABLE_SS=false
+    ENABLE_HY2=false
+    ENABLE_TUIC=false
+    ENABLE_REALITY=false
     
-    if $ENABLE_SS; then
-        PORT_SS=$PORT_SS_FIXED
-        PSK_SS=$(rand_ss_key)
-        info "SS 端口: $PORT_SS"
+    # 判断是否有传入参数（参数大于0个）
+    if [ $# -gt 0 ]; then
+        info "=== 检测到命令行参数，启动自动安装模式 ==="
+        
+        # 使用 while 循环处理参数，方便提取 --report 的值
+        while [[ $# -gt 0 ]]; do
+            arg="$1"
+            # 转小写
+            arg_lower=$(echo "$arg" | tr '[:upper:]' '[:lower:]')
+            
+            case "$arg_lower" in
+                --report)
+                    if [[ -n "${2:-}" ]]; then
+                        REPORT_URL="$2"
+                        info "-> 启用自动上报: $REPORT_URL"
+                        shift # 移除 --report
+                    else
+                        warn "--report 参数后面必须跟 URL 地址"
+                    fi
+                    ;;
+                ss|shadowsocks) 
+                    ENABLE_SS=true 
+                    info "-> 启用 Shadowsocks"
+                    ;;
+                hy2|hysteria2)  
+                    ENABLE_HY2=true 
+                    info "-> 启用 Hysteria2"
+                    ;;
+                tuic)           
+                    ENABLE_TUIC=true 
+                    info "-> 启用 TUIC"
+                    ;;
+                vless|reality)  
+                    ENABLE_REALITY=true 
+                    info "-> 启用 VLESS Reality"
+                    ;;
+                *) 
+                    warn "忽略未知参数: $arg" 
+                    ;;
+            esac
+            shift # 移动到下一个参数
+        done
+        
+        # 检查是否命中至少一个协议
+        if ! $ENABLE_SS && ! $ENABLE_HY2 && ! $ENABLE_TUIC && ! $ENABLE_REALITY; then
+            err "提供的参数无效，未选中任何协议！"
+            exit 1
+        fi
+
+    else
+        # --- (交互逻辑保持不变，为了节省篇幅省略，请保留原脚本这部分代码) ---
+        info "=== 选择要部署的协议 ==="
+        echo "1) Shadowsocks (SS)"
+        echo "2) Hysteria2 (HY2)"
+        echo "3) TUIC"
+        echo "4) VLESS Reality"
+        echo ""
+        echo "请输入要部署的协议编号(多个用空格分隔,如: 1 2 4):"
+        read -r protocol_input
+        
+        for num in $protocol_input; do
+            case "$num" in
+                1) ENABLE_SS=true ;;
+                2) ENABLE_HY2=true ;;
+                3) ENABLE_TUIC=true ;;
+                4) ENABLE_REALITY=true ;;
+                *) warn "无效选项: $num" ;;
+            esac
+        done
+        
+        if ! $ENABLE_SS && ! $ENABLE_HY2 && ! $ENABLE_TUIC && ! $ENABLE_REALITY; then
+            err "未选择任何协议,退出安装"
+            exit 1
+        fi
+        
+        info "已选择协议:"
+        $ENABLE_SS && echo "  - Shadowsocks"
+        $ENABLE_HY2 && echo "  - Hysteria2"
+        $ENABLE_TUIC && echo "  - TUIC"
+        $ENABLE_REALITY && echo "  - VLESS Reality"
     fi
-    if $ENABLE_HY2; then
-        PORT_HY2=$PORT_HY2_FIXED
-        PSK_HY2=$(rand_pass_safe)
-        info "HY2 端口: $PORT_HY2"
-    fi
-    if $ENABLE_TUIC; then
-        PORT_TUIC=$PORT_TUIC_FIXED
-        PSK_TUIC=$(rand_pass_safe)
-        UUID_TUIC=$(rand_uuid)
-        info "TUIC 端口: $PORT_TUIC"
-    fi
-    if $ENABLE_REALITY; then
-        PORT_REALITY=$PORT_REALITY_FIXED
-        UUID=$(rand_uuid)
-        info "Reality 端口: $PORT_REALITY"
-    fi
+    
+    # --- 持久化保持不变 ---
+    mkdir -p /etc/sing-box
+    cat > /etc/sing-box/.protocols <<EOF
+ENABLE_SS=$ENABLE_SS
+ENABLE_HY2=$ENABLE_HY2
+ENABLE_TUIC=$ENABLE_TUIC
+ENABLE_REALITY=$ENABLE_REALITY
+EOF
+    export ENABLE_SS ENABLE_HY2 ENABLE_TUIC ENABLE_REALITY
 }
+
+# 创建配置目录
+mkdir -p /etc/sing-box
+select_protocols "$@"
+
+# -----------------------
+# 配置 SS 加密方式 (直接读取顶部配置)
+select_ss_method() {
+    # 直接使用顶部定义的变量
+    SS_METHOD="$FIXED_SS_METHOD"
+    
+    # 如果启用 SS，打印一下提示
+    if $ENABLE_SS; then
+        info "SS 加密方式已设置为: $SS_METHOD"
+    fi
+    
+    # 导出变量供后续使用
+    export SS_METHOD
+}
+
+# 调用函数
+select_ss_method
+
+# -----------------------
+# 在获取公网 IP 之前，询问连接ip和sni配置
+# echo ""
+# echo "请输入节点连接 IP 或 DDNS域名(留空默认出口IP):"
+# read -r CUSTOM_IP
+# CUSTOM_IP="$(echo "$CUSTOM_IP" | tr -d '[:space:]')"
+
+# 修改为默认使用出口IP
+CUSTOM_IP=""
+
+# 直接使用开头定义的SNI域名
+REALITY_SNI="$FIXED_REALITY_SNI"
+
+# 将用户选择写入缓存
+mkdir -p /etc/sing-box
+# preserve existing cache if any (append/overwrite relevant keys)
+# 最简单直接：在后面 create_config 也会写入 .config_cache，先写初始值以便中间步骤可读取
+echo "CUSTOM_IP=$CUSTOM_IP" > /etc/sing-box/.config_cache.tmp || true
+echo "REALITY_SNI=$REALITY_SNI" >> /etc/sing-box/.config_cache.tmp || true
+# 保留其他可能已有的缓存条目（若存在老的 .config_cache），把新临时与旧文件合并（保新值覆盖旧值）
+if [ -f /etc/sing-box/.config_cache ]; then
+    # 将旧文件中不在新文件内的行追加
+    awk 'FNR==NR{a[$1]=1;next} {split($0,k,"="); if(!(k[1] in a)) print $0}' /etc/sing-box/.config_cache.tmp /etc/sing-box/.config_cache >> /etc/sing-box/.config_cache.tmp2 || true
+    mv /etc/sing-box/.config_cache.tmp2 /etc/sing-box/.config_cache.tmp || true
+fi
+mv /etc/sing-box/.config_cache.tmp /etc/sing-box/.config_cache || true
+
+# -----------------------
+# 生成随机端口
+rand_port() {
+    shuf -i 10000-60000 -n 1 2>/dev/null || echo $((RANDOM % 50001 + 10000))
+}
+
+# 生成随机密码
+rand_pass() {
+    openssl rand -base64 16 | tr -d '\n\r' || head -c 16 /dev/urandom | base64 | tr -d '\n\r'
+}
+
+# 生成UUID
+rand_uuid() {
+    cat /proc/sys/kernel/random/uuid
+}
+
+# -----------------------
+# 配置端口和密码
+get_config() {
+    info "开始配置端口和密码..."
+    
+    # --- Shadowsocks ---
+    if $ENABLE_SS; then
+        # 直接使用顶部定义的变量
+        PORT_SS="$FIXED_PORT_SS"
+        # 密码依然保留随机生成(也可以按需改成固定)
+        PSK_SS=$(rand_pass)
+        
+    fi
+
+    # --- Hysteria2 ---
+    if $ENABLE_HY2; then
+        PORT_HY2="$FIXED_PORT_HY2"
+        PSK_HY2=$(rand_pass)
+        
+    fi
+
+    # --- TUIC ---
+    if $ENABLE_TUIC; then
+        PORT_TUIC="$FIXED_PORT_TUIC"
+        PSK_TUIC=$(rand_pass)
+        UUID_TUIC=$(rand_uuid)
+        
+    fi
+
+    # --- Reality ---
+    if $ENABLE_REALITY; then
+        PORT_REALITY="$FIXED_PORT_REALITY"
+        UUID=$(rand_uuid)
+        
+    fi
+
+}
+
 get_config
 
 # -----------------------
 # 安装 sing-box
-# -----------------------
 install_singbox() {
-    info "检查 sing-box 安装..."
+    info "开始安装 sing-box..."
+
     if command -v sing-box >/dev/null 2>&1; then
-        info "sing-box 已安装"
-        return 0
+        CURRENT_VERSION=$(sing-box version 2>/dev/null | head -1 || echo "unknown")
+        warn "检测到已安装 sing-box: $CURRENT_VERSION"
+        read -p "是否重新安装?(y/N): " REINSTALL
+        if [[ ! "$REINSTALL" =~ ^[Yy]$ ]]; then
+            info "跳过 sing-box 安装"
+            return 0
+        fi
     fi
+
     case "$OS" in
-        alpine) apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box ;;
-        debian|redhat) 
-            # 使用官方脚本安装
-            bash <(curl -fsSL https://sing-box.app/install.sh) || warn "官方安装脚本可能报错，但如果不影响二进制文件运行则忽略。"
+        alpine)
+            info "使用 Edge 仓库安装 sing-box"
+            apk update || { err "apk update 失败"; exit 1; }
+            apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box || {
+                err "sing-box 安装失败"
+                exit 1
+            }
+            ;;
+        debian|redhat)
+            bash <(curl -fsSL https://sing-box.app/install.sh) || {
+                err "sing-box 安装失败"
+                exit 1
+            }
+            ;;
+        *)
+            err "未支持的系统,无法安装 sing-box"
+            exit 1
             ;;
     esac
+
+    if ! command -v sing-box >/dev/null 2>&1; then
+        err "sing-box 安装后未找到可执行文件"
+        exit 1
+    fi
+
+    INSTALLED_VERSION=$(sing-box version 2>/dev/null | head -1 || echo "unknown")
+    info "sing-box 安装成功: $INSTALLED_VERSION"
 }
+
 install_singbox
 
 # -----------------------
-# 生成密钥与证书
+# 生成 Reality 密钥对（必须在 sing-box 安装之后）
+generate_reality_keys() {
+    if ! $ENABLE_REALITY; then
+        info "跳过 Reality 密钥生成（未选择 Reality 协议）"
+        return 0
+    fi
+    
+    info "生成 Reality 密钥对..."
+    
+    if ! command -v sing-box >/dev/null 2>&1; then
+        err "sing-box 未安装，无法生成 Reality 密钥"
+        exit 1
+    fi
+    
+    REALITY_KEYS=$(sing-box generate reality-keypair 2>&1) || {
+        err "生成 Reality 密钥失败"
+        exit 1
+    }
+    
+    REALITY_PK=$(echo "$REALITY_KEYS" | grep "PrivateKey" | awk '{print $NF}' | tr -d '\r')
+    REALITY_PUB=$(echo "$REALITY_KEYS" | grep "PublicKey" | awk '{print $NF}' | tr -d '\r')
+    REALITY_SID=$(sing-box generate rand 8 --hex 2>&1) || {
+        err "生成 Reality ShortID 失败"
+        exit 1
+    }
+    
+    if [ -z "$REALITY_PK" ] || [ -z "$REALITY_PUB" ] || [ -z "$REALITY_SID" ]; then
+        err "Reality 密钥生成结果为空"
+        exit 1
+    fi
+    
+    mkdir -p /etc/sing-box
+    echo -n "$REALITY_PUB" > /etc/sing-box/.reality_pub
+    echo -n "$REALITY_SID" > /etc/sing-box/.reality_sid
+    
+    info "Reality 密钥已生成"
+}
+
+generate_reality_keys
+
 # -----------------------
-generate_keys_and_certs() {
+# 生成 HY2/TUIC 自签证书(仅在需要时)
+generate_cert() {
+    if ! $ENABLE_HY2 && ! $ENABLE_TUIC; then
+        info "跳过证书生成(未选择 HY2 或 TUIC)"
+        return 0
+    fi
+    
+    info "生成 HY2/TUIC 自签证书..."
     mkdir -p /etc/sing-box/certs
     
-    if $ENABLE_REALITY; then
-        info "生成 Reality 密钥..."
-        REALITY_KEYS=$(sing-box generate reality-keypair 2>&1)
-        REALITY_PK=$(echo "$REALITY_KEYS" | grep "PrivateKey" | awk '{print $NF}' | tr -d '\r')
-        REALITY_PUB=$(echo "$REALITY_KEYS" | grep "PublicKey" | awk '{print $NF}' | tr -d '\r')
-        REALITY_SID=$(sing-box generate rand 8 --hex 2>&1)
-        echo -n "$REALITY_PUB" > /etc/sing-box/.reality_pub
-        echo -n "$REALITY_SID" > /etc/sing-box/.reality_sid
-    fi
-
-    if $ENABLE_HY2 || $ENABLE_TUIC; then
-        info "生成自签证书..."
-        if [ ! -f /etc/sing-box/certs/fullchain.pem ]; then
-            openssl req -x509 -newkey rsa:2048 -nodes \
-            -keyout /etc/sing-box/certs/privkey.pem \
-            -out /etc/sing-box/certs/fullchain.pem \
-            -days 3650 -subj "/CN=www.bing.com" >/dev/null 2>&1
-        fi
+    if [ ! -f /etc/sing-box/certs/fullchain.pem ] || [ ! -f /etc/sing-box/certs/privkey.pem ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes \
+          -keyout /etc/sing-box/certs/privkey.pem \
+          -out /etc/sing-box/certs/fullchain.pem \
+          -days 3650 \
+          -subj "/CN=www.bing.com" || {
+            err "证书生成失败"
+            exit 1
+        }
+        info "证书已生成"
+    else
+        info "证书已存在"
     fi
 }
-generate_keys_and_certs
+
+generate_cert
 
 # -----------------------
-# 生成配置文件 config.json
-# -----------------------
+# 生成配置文件
 CONFIG_PATH="/etc/sing-box/config.json"
-CACHE_FILE="/etc/sing-box/.config_cache"
 
 create_config() {
-    info "写入配置文件..."
+    info "生成配置文件: $CONFIG_PATH"
+
     mkdir -p "$(dirname "$CONFIG_PATH")"
-    local TEMP_INBOUNDS="/tmp/singbox_inbounds_$$.json"
+
+    # 构建 inbounds 内容（使用临时文件避免字符串处理问题）
+    local TEMP_INBOUNDS="/tmp/singbox_inbounds_$.json"
     > "$TEMP_INBOUNDS"
     
     local need_comma=false
     
-    # SS 配置
     if $ENABLE_SS; then
-        cat >> "$TEMP_INBOUNDS" <<EOF
+        cat >> "$TEMP_INBOUNDS" <<'INBOUND_SS'
     {
       "type": "shadowsocks",
       "listen": "::",
-      "listen_port": $PORT_SS,
-      "method": "2022-blake3-aes-128-gcm",
-      "password": "$PSK_SS",
+      "listen_port": PORT_SS_PLACEHOLDER,
+      "method": "METHOD_SS_PLACEHOLDER",
+      "password": "PSK_SS_PLACEHOLDER",
       "tag": "ss-in"
     }
-EOF
+INBOUND_SS
+        sed -i "s|PORT_SS_PLACEHOLDER|$PORT_SS|g" "$TEMP_INBOUNDS"
+        sed -i "s|METHOD_SS_PLACEHOLDER|$SS_METHOD|g" "$TEMP_INBOUNDS"
+        sed -i "s|PSK_SS_PLACEHOLDER|$PSK_SS|g" "$TEMP_INBOUNDS"
         need_comma=true
     fi
     
-    # HY2 配置
     if $ENABLE_HY2; then
         $need_comma && echo "," >> "$TEMP_INBOUNDS"
-        cat >> "$TEMP_INBOUNDS" <<EOF
+        cat >> "$TEMP_INBOUNDS" <<'INBOUND_HY2'
     {
       "type": "hysteria2",
       "tag": "hy2-in",
       "listen": "::",
-      "listen_port": $PORT_HY2,
-      "users": [{ "password": "$PSK_HY2" }],
+      "listen_port": PORT_HY2_PLACEHOLDER,
+      "users": [
+        {
+          "password": "PSK_HY2_PLACEHOLDER"
+        }
+      ],
       "tls": {
         "enabled": true,
         "alpn": ["h3"],
@@ -277,20 +519,26 @@ EOF
         "key_path": "/etc/sing-box/certs/privkey.pem"
       }
     }
-EOF
+INBOUND_HY2
+        sed -i "s|PORT_HY2_PLACEHOLDER|$PORT_HY2|g" "$TEMP_INBOUNDS"
+        sed -i "s|PSK_HY2_PLACEHOLDER|$PSK_HY2|g" "$TEMP_INBOUNDS"
         need_comma=true
     fi
     
-    # TUIC 配置
     if $ENABLE_TUIC; then
         $need_comma && echo "," >> "$TEMP_INBOUNDS"
-        cat >> "$TEMP_INBOUNDS" <<EOF
+        cat >> "$TEMP_INBOUNDS" <<'INBOUND_TUIC'
     {
       "type": "tuic",
       "tag": "tuic-in",
       "listen": "::",
-      "listen_port": $PORT_TUIC,
-      "users": [{ "uuid": "$UUID_TUIC", "password": "$PSK_TUIC" }],
+      "listen_port": PORT_TUIC_PLACEHOLDER,
+      "users": [
+        {
+          "uuid": "UUID_TUIC_PLACEHOLDER",
+          "password": "PSK_TUIC_PLACEHOLDER"
+        }
+      ],
       "congestion_control": "bbr",
       "tls": {
         "enabled": true,
@@ -299,108 +547,189 @@ EOF
         "key_path": "/etc/sing-box/certs/privkey.pem"
       }
     }
-EOF
+INBOUND_TUIC
+        sed -i "s|PORT_TUIC_PLACEHOLDER|$PORT_TUIC|g" "$TEMP_INBOUNDS"
+        sed -i "s|UUID_TUIC_PLACEHOLDER|$UUID_TUIC|g" "$TEMP_INBOUNDS"
+        sed -i "s|PSK_TUIC_PLACEHOLDER|$PSK_TUIC|g" "$TEMP_INBOUNDS"
         need_comma=true
     fi
     
-    # Reality 配置
     if $ENABLE_REALITY; then
         $need_comma && echo "," >> "$TEMP_INBOUNDS"
-        cat >> "$TEMP_INBOUNDS" <<EOF
+        cat >> "$TEMP_INBOUNDS" <<'INBOUND_REALITY'
     {
       "type": "vless",
       "tag": "vless-in",
       "listen": "::",
-      "listen_port": $PORT_REALITY,
-      "users": [{ "uuid": "$UUID", "flow": "xtls-rprx-vision" }],
+      "listen_port": PORT_REALITY_PLACEHOLDER,
+      "users": [
+        {
+          "uuid": "UUID_REALITY_PLACEHOLDER",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
       "tls": {
         "enabled": true,
-        "server_name": "learn.microsoft.com",
+        "server_name": "REALITY_SNI_PLACEHOLDER",
         "reality": {
           "enabled": true,
-          "handshake": { "server": "learn.microsoft.com", "server_port": 443 },
-          "private_key": "$REALITY_PK",
-          "short_id": ["$REALITY_SID"]
+          "handshake": {
+            "server": "REALITY_SNI_PLACEHOLDER",
+            "server_port": 443
+          },
+          "private_key": "REALITY_PK_PLACEHOLDER",
+          "short_id": ["REALITY_SID_PLACEHOLDER"]
         }
       }
     }
-EOF
+INBOUND_REALITY
+        sed -i "s|PORT_REALITY_PLACEHOLDER|$PORT_REALITY|g" "$TEMP_INBOUNDS"
+        sed -i "s|UUID_REALITY_PLACEHOLDER|$UUID|g" "$TEMP_INBOUNDS"
+        sed -i "s|REALITY_PK_PLACEHOLDER|$REALITY_PK|g" "$TEMP_INBOUNDS"
+        sed -i "s|REALITY_SID_PLACEHOLDER|$REALITY_SID|g" "$TEMP_INBOUNDS"
+        sed -i "s|REALITY_SNI_PLACEHOLDER|$REALITY_SNI|g" "$TEMP_INBOUNDS"
     fi
 
-    cat > "$CONFIG_PATH" <<EOF
+    # 生成最终配置
+    cat > "$CONFIG_PATH" <<'CONFIG_HEAD'
 {
-  "log": { "level": "info", "timestamp": true },
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
   "inbounds": [
-EOF
+CONFIG_HEAD
+    
     cat "$TEMP_INBOUNDS" >> "$CONFIG_PATH"
-    cat >> "$CONFIG_PATH" <<EOF
+    
+    cat >> "$CONFIG_PATH" <<'CONFIG_TAIL'
   ],
-  "outbounds": [{ "type": "direct", "tag": "direct-out" }]
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct-out"
+    }
+  ]
 }
-EOF
+CONFIG_TAIL
+
     rm -f "$TEMP_INBOUNDS"
 
-    cat > "$CACHE_FILE" <<EOF
+    sing-box check -c "$CONFIG_PATH" >/dev/null 2>&1 \
+       && info "配置文件验证通过" \
+       || warn "配置文件验证失败,但继续执行"
+
+    # 保存配置缓存（追加/覆盖）
+    cat > /etc/sing-box/.config_cache <<CACHEEOF
 ENABLE_SS=$ENABLE_SS
 ENABLE_HY2=$ENABLE_HY2
 ENABLE_TUIC=$ENABLE_TUIC
 ENABLE_REALITY=$ENABLE_REALITY
-PORT_SS="$PORT_SS"
-PORT_HY2="$PORT_HY2"
-PORT_TUIC="$PORT_TUIC"
-PORT_REALITY="$PORT_REALITY"
-PSK_SS="$PSK_SS"
-PSK_HY2="$PSK_HY2"
-PSK_TUIC="$PSK_TUIC"
-UUID_TUIC="$UUID_TUIC"
-UUID="$UUID"
-REALITY_PK="$REALITY_PK"
-REALITY_PUB="$REALITY_PUB"
-REALITY_SID="$REALITY_SID"
-EOF
-    
-    # 修复权限问题：确保所有用户（包括 nobody/sing-box 用户）可读
-    chmod -R 755 /etc/sing-box
+CACHEEOF
+
+    $ENABLE_SS && cat >> /etc/sing-box/.config_cache <<CACHEEOF
+SS_PORT=$PORT_SS
+SS_PSK=$PSK_SS
+SS_METHOD=$SS_METHOD
+CACHEEOF
+
+    $ENABLE_HY2 && cat >> /etc/sing-box/.config_cache <<CACHEEOF
+HY2_PORT=$PORT_HY2
+HY2_PSK=$PSK_HY2
+CACHEEOF
+
+    $ENABLE_TUIC && cat >> /etc/sing-box/.config_cache <<CACHEEOF
+TUIC_PORT=$PORT_TUIC
+TUIC_UUID=$UUID_TUIC
+TUIC_PSK=$PSK_TUIC
+CACHEEOF
+
+    $ENABLE_REALITY && cat >> /etc/sing-box/.config_cache <<CACHEEOF
+REALITY_PORT=$PORT_REALITY
+REALITY_UUID=$UUID
+REALITY_PK=$REALITY_PK
+REALITY_SID=$REALITY_SID
+REALITY_PUB=$REALITY_PUB
+REALITY_SNI=$REALITY_SNI
+CACHEEOF
+
+    # 全局写入 CUSTOM_IP（哪怕为空也写）
+    echo "CUSTOM_IP=$CUSTOM_IP" >> /etc/sing-box/.config_cache
+
+    info "配置缓存已保存到 /etc/sing-box/.config_cache"
 }
+
+# 调用配置生成
 create_config
 
+info "配置生成完成，准备设置服务..."
+
 # -----------------------
-# 配置并启动服务 (针对环境修复)
-# -----------------------
+# 设置服务
 setup_service() {
     info "配置系统服务..."
     
     if [ "$OS" = "alpine" ]; then
         SERVICE_PATH="/etc/init.d/sing-box"
+        
         cat > "$SERVICE_PATH" <<'OPENRC'
 #!/sbin/openrc-run
+
 name="sing-box"
+description="Sing-box Proxy Server"
 command="/usr/bin/sing-box"
 command_args="run -c /etc/sing-box/config.json"
 pidfile="/run/${RC_SVCNAME}.pid"
 command_background="yes"
+output_log="/var/log/sing-box.log"
+error_log="/var/log/sing-box.err"
+# 自动拉起（程序崩溃、OOM、被 kill 后自动恢复）
 supervisor=supervise-daemon
 supervise_daemon_args="--respawn-max 0 --respawn-delay 5"
-depend() { need net; after firewall; }
-start_pre() { checkpath --directory --mode 0755 /var/log; checkpath --directory --mode 0755 /run; }
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath --directory --mode 0755 /var/log
+    checkpath --directory --mode 0755 /run
+}
 OPENRC
+        
         chmod +x "$SERVICE_PATH"
-        rc-update add sing-box default >/dev/null 2>&1 || true
-        rc-service sing-box restart
+        rc-update add sing-box default >/dev/null 2>&1 || warn "添加开机自启失败"
+        rc-service sing-box restart || {
+            err "服务启动失败"
+            tail -20 /var/log/sing-box.err 2>/dev/null || tail -20 /var/log/sing-box.log 2>/dev/null || true
+            exit 1
+        }
+        
+        sleep 2
+        if rc-service sing-box status >/dev/null 2>&1; then
+            info "✅ OpenRC 服务已启动"
+        else
+            err "服务状态异常"
+            exit 1
+        fi
+        
     else
-        # 兼容性修复：覆盖 Service 文件，强制使用 Root 避免权限问题
         SERVICE_PATH="/etc/systemd/system/sing-box.service"
+        
         cat > "$SERVICE_PATH" <<'SYSTEMD'
 [Unit]
 Description=Sing-box Proxy Server
+Documentation=https://sing-box.sagernet.org
 After=network.target nss-lookup.target
+Wants=network.target
 
 [Service]
-# [关键修复] 强制 Root 运行，解决权限和用户不存在问题
+Type=simple
 User=root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+WorkingDirectory=/etc/sing-box
 ExecStart=/usr/bin/sing-box run -c /etc/sing-box/config.json
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10s
 LimitNOFILE=1048576
@@ -408,291 +737,914 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 SYSTEMD
-
-        # 在容器中 daemon-reload 可能会失败，忽略它，不让脚本退出
-        systemctl daemon-reload >/dev/null 2>&1 || true
-        systemctl enable sing-box >/dev/null 2>&1 || true
+        
+        systemctl daemon-reload
+        systemctl enable sing-box >/dev/null 2>&1
+        systemctl restart sing-box || {
+            err "服务启动失败"
+            journalctl -u sing-box -n 30 --no-pager
+            exit 1
+        }
+        
+        sleep 2
+        if systemctl is-active sing-box >/dev/null 2>&1; then
+            info "✅ Systemd 服务已启动"
+        else
+            err "服务状态异常"
+            exit 1
+        fi
     fi
+    
+    info "服务配置完成: $SERVICE_PATH"
 }
+
 setup_service
 
 # -----------------------
-# 部署增强版 sb 管理脚本 (引入三级启动保障)
-# -----------------------
-SB_PATH="/usr/local/bin/sb"
-cat > "$SB_PATH" <<'SB_SCRIPT'
-#!/usr/bin/env bash
-info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }
-warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
-err()  { echo -e "\033[1;31m[ERR]\033[0m $*"; }
-
-CACHE_FILE="/etc/sing-box/.config_cache"
-CONFIG_PATH="/etc/sing-box/config.json"
-LOG_FILE="/var/log/sing-box.log"
-
-get_pid() {
-    pgrep -x "sing-box" || echo ""
+# 获取公网 IP
+get_public_ip() {
+    local ip=""
+    for url in \
+        "https://api.ipify.org" \
+        "https://ipinfo.io/ip" \
+        "https://ifconfig.me" \
+        "https://icanhazip.com" \
+        "https://ipecho.net/plain"; do
+        ip=$(curl -s --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]' || true)
+        if [ -n "$ip" ] && [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+    return 1
 }
 
-# --- 核心：多重启动机制 (Fix for US-BWG) ---
-restart_service() {
-    info "正在尝试重启服务..."
-    
-    # 0. 先清理
-    killall sing-box >/dev/null 2>&1
-    sleep 1
-
-    # 1. 尝试 Systemd (标准)
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl stop sing-box >/dev/null 2>&1
-        systemctl start sing-box >/dev/null 2>&1
-        sleep 2
-        if [ -n "$(get_pid)" ]; then info "✅ Systemd 启动成功"; return; fi
-    fi
-    
-    # 2. 尝试 Service (旧式)
-    if command -v service >/dev/null 2>&1; then
-        service sing-box start >/dev/null 2>&1
-        sleep 2
-        if [ -n "$(get_pid)" ]; then info "✅ Service 启动成功"; return; fi
-    fi
-    
-    # 3. Alpine OpenRC
-    if command -v rc-service >/dev/null 2>&1; then
-        rc-service sing-box restart >/dev/null 2>&1
-        sleep 2
-        if [ -n "$(get_pid)" ]; then info "✅ OpenRC 启动成功"; return; fi
-    fi
-
-    # 4. [核弹级兜底] 强制 Nohup 后台运行
-    warn "⚠️ 常规服务启动失败 (可能是容器环境)，尝试强制后台运行..."
-    # 确保日志文件可写
-    touch "$LOG_FILE" && chmod 666 "$LOG_FILE"
-    nohup /usr/bin/sing-box run -c "$CONFIG_PATH" > "$LOG_FILE" 2>&1 &
-    sleep 2
-    
-    if [ -n "$(get_pid)" ]; then
-        info "✅ 强制启动成功! (PID: $(get_pid))"
-        info "日志已重定向至: $LOG_FILE"
+# 如果用户提供了 CUSTOM_IP，则优先使用；否则自动检测出口 IP
+if [ -n "${CUSTOM_IP:-}" ]; then
+    PUB_IP="$CUSTOM_IP"
+    info "使用用户提供的连接IP或ddns域名 : $PUB_IP"
+else
+    PUB_IP=$(get_public_ip || echo "YOUR_SERVER_IP")
+    if [ "$PUB_IP" = "YOUR_SERVER_IP" ]; then
+        warn "无法获取公网 IP,请手动替换"
     else
-        err "❌ 所有启动方式均失败。"
-        err "请选择菜单中的 [5] 诊断模式 查看具体报错！"
+        info "检测到公网 IP: $PUB_IP"
     fi
-}
-
-# 查看日志功能 (自动判断日志位置)
-view_logs() {
-    echo ""
-    info "正在获取最近 20 行日志..."
-    echo "--------------------------------"
-    
-    has_logs=false
-    
-    # 1. 检查 nohup 日志 (兜底模式产生的)
-    if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
-        echo ">>> 来自文件日志 ($LOG_FILE):"
-        tail -n 20 "$LOG_FILE"
-        has_logs=true
-    fi
-
-    # 2. 检查 systemd 日志
-    if command -v journalctl >/dev/null 2>&1; then
-        if ! journalctl -u sing-box --no-pager -n 1 2>&1 | grep -q "No entries"; then
-            echo ">>> 来自 Systemd 日志:"
-            journalctl -u sing-box --no-pager -n 20
-            has_logs=true
-        fi
-    fi
-
-    if [ "$has_logs" = false ]; then
-        warn "暂无日志产生，服务可能从未启动成功。"
-    fi
-    echo "--------------------------------"
-    read -p "按回车键返回菜单..."
-}
-
-# 诊断模式 (前台运行)
-debug_mode() {
-    echo ""
-    warn "=== 进入诊断模式 ==="
-    warn "程序将直接在前台运行，任何报错都会显示在屏幕上。"
-    warn "按 Ctrl+C 可以退出诊断。"
-    echo "Executing: /usr/bin/sing-box run -c $CONFIG_PATH"
-    echo "------------------------------------------------"
-    /usr/bin/sing-box run -c "$CONFIG_PATH"
-    echo "------------------------------------------------"
-    read -p "诊断结束。按回车返回..."
-}
-
-show_links() {
-    if [ -f "$CACHE_FILE" ]; then
-        source "$CACHE_FILE"
-        suffix=$(cat /root/node_names.txt 2>/dev/null || echo "")
-        PUB_IP=$(curl -s --max-time 4 "https://api64.ipify.org" || echo "YOUR_SERVER_IP")
-        if [[ "$PUB_IP" == *":"* ]]; then PUB_IP="[$PUB_IP]"; fi
-        
-        echo ""
-        info "📜 节点链接列表 (IP: $PUB_IP):"
-        
-        if [ "${ENABLE_SS:-false}" = "true" ]; then
-            ss_info="2022-blake3-aes-128-gcm:${PSK_SS}"
-            ss_b64=$(printf "%s" "$ss_info" | base64 | tr -d '\n')
-            echo "   ss://${ss_b64}@${PUB_IP}:${PORT_SS}#ss${suffix}"
-        fi
-        if [ "${ENABLE_HY2:-false}" = "true" ]; then
-            echo "   hy2://${PSK_HY2}@${PUB_IP}:${PORT_HY2}/?sni=www.bing.com&alpn=h3&insecure=1#hy2${suffix}"
-        fi
-        if [ "${ENABLE_TUIC:-false}" = "true" ]; then
-            echo "   tuic://${UUID_TUIC}:${PSK_TUIC}@${PUB_IP}:${PORT_TUIC}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#tuic${suffix}"
-        fi
-        if [ "${ENABLE_REALITY:-false}" = "true" ]; then
-            echo "   vless://${UUID}@${PUB_IP}:${PORT_REALITY}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=learn.microsoft.com&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality${suffix}"
-        fi
-        echo ""
-        read -p "按回车键返回菜单..."
-    else
-        err "未找到配置缓存文件，无法生成链接。"
-        read -p "按回车键返回菜单..."
-    fi
-}
-
-uninstall_singbox() {
-    echo ""
-    read -p "⚠️ 确定要完全卸载 sing-box 吗？(y/N): " confirm
-    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-        info "已取消"
-        return
-    fi
-    
-    info "正在停止服务..."
-    killall sing-box >/dev/null 2>&1
-    
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl disable sing-box >/dev/null 2>&1 || true
-        rm -f /etc/systemd/system/sing-box.service
-    fi
-    
-    info "正在清理文件..."
-    rm -rf /etc/sing-box
-    rm -f /usr/bin/sing-box
-    rm -f /usr/local/bin/sb
-    rm -f /root/node_names.txt
-    rm -f /var/log/sing-box.log
-    
-    info "✅ 卸载完成。"
-    exit 0
-}
-
-show_menu() {
-    clear
-    echo "=============================="
-    echo "   Sing-box 管理面板 (sb)   "
-    echo "=============================="
-    
-    local pid=$(get_pid)
-    if [ -n "$pid" ]; then
-        echo -e " 运行状态: \033[1;32m运行中 (PID: $pid)\033[0m"
-    else
-        echo -e " 运行状态: \033[1;31m未运行\033[0m"
-    fi
-    
-    echo "------------------------------"
-    echo " 1) 查看节点链接"
-    echo " 2) 重启服务 (及状态检查)"
-    echo " 3) 查看运行日志 (排错用)"
-    echo " 4) 编辑配置文件 (vi)"
-    echo " 5) 诊断模式 (直接显示报错)"
-    echo " 6) 卸载程序"
-    echo " 0) 退出"
-    echo "------------------------------"
-}
-
-while true; do
-    show_menu
-    read -p "请输入选项 [0-6]: " opt
-    case "$opt" in
-        1) show_links;;
-        2) restart_service; read -p "按回车键继续..." ;;
-        3) view_logs;;
-        4) 
-            ${EDITOR:-vi} "$CONFIG_PATH"
-            read -p "配置已修改，是否重启服务生效? (y/n): " confirm
-            if [[ "$confirm" == "y" ]]; then restart_service; fi
-            ;;
-        5) debug_mode;;
-        6) uninstall_singbox;;
-        0) exit 0;;
-        *) echo "无效选项，请重试。"; sleep 1;;
-    esac
-done
-SB_SCRIPT
-chmod +x "$SB_PATH"
+fi
 
 # -----------------------
-# 输出与上报逻辑 (首次安装尝试启动)
-# -----------------------
-get_public_ip() { curl -s --max-time 5 "https://api64.ipify.org" || echo "YOUR_SERVER_IP"; }
-PUB_IP=$(get_public_ip)
-
-report_node() {
-    local proto=$1
-    local link=$2
-    if [ -z "$REPORT_URL" ]; then return; fi
-    info "☁️ 正在上报 [${proto}] 节点信息到服务器..."
-    local node_name="${HOST_NAME:-Node}"
-    local json_payload="{\"name\":\"${node_name}\", \"protocol\":\"${proto}\", \"link\":\"${link}\"}"
-    curl -s -X POST -H "Content-Type: application/json" -d "$json_payload" "$REPORT_URL" >/dev/null || warn "⚠️ 上报 [${proto}] 失败"
-}
-
-print_info() {
+# 生成链接(仅生成已选择的协议)
+generate_uris() {
     local host="$PUB_IP"
-    if [[ "$host" == *":"* ]]; then host="[$host]"; fi
-
-    echo ""
-    info "📜 节点链接列表:"
     
     if $ENABLE_SS; then
-        local ss_info="2022-blake3-aes-128-gcm:${PSK_SS}"
-        local ss_b64=$(printf "%s" "$ss_info" | base64 | tr -d '\n')
-        local link="ss://${ss_b64}@${host}:${PORT_SS}#ss${suffix}"
-        echo "   $link"
-        report_node "ss" "$link"
+        local ss_userinfo="${SS_METHOD}:${PSK_SS}"
+        ss_encoded=$(printf "%s" "$ss_userinfo" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+        ss_b64=$(printf "%s" "$ss_userinfo" | base64 -w0 2>/dev/null || printf "%s" "$ss_userinfo" | base64 | tr -d '\n')
+
+        echo "=== Shadowsocks (SS) ==="
+        echo "ss://${ss_encoded}@${host}:${PORT_SS}#ss${suffix}"
+        echo "ss://${ss_b64}@${host}:${PORT_SS}#ss${suffix}"
+        echo ""
     fi
     
     if $ENABLE_HY2; then
-        local link="hy2://${PSK_HY2}@${host}:${PORT_HY2}/?sni=www.bing.com&alpn=h3&insecure=1#hy2${suffix}"
-        echo "   $link"
-        report_node "hy2" "$link"
-    fi
-    if $ENABLE_TUIC; then
-        local link="tuic://${UUID_TUIC}:${PSK_TUIC}@${host}:${PORT_TUIC}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#tuic${suffix}"
-        echo "   $link"
-        report_node "tuic" "$link"
-    fi
-    if $ENABLE_REALITY; then
-        local link="vless://${UUID}@${host}:${PORT_REALITY}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=learn.microsoft.com&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality${suffix}"
-        echo "   $link"
-        report_node "vless" "$link"
+        hy2_encoded=$(printf "%s" "$PSK_HY2" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+        echo "=== Hysteria2 (HY2) ==="
+        echo "hy2://${hy2_encoded}@${host}:${PORT_HY2}/?sni=www.bing.com&alpn=h3&insecure=1#hy2${suffix}"
+        echo ""
     fi
 
-    echo ""
-    if [ -n "$REPORT_URL" ]; then
-        info "✅ 节点自动上报已完成。"
+    if $ENABLE_TUIC; then
+        tuic_encoded=$(printf "%s" "$PSK_TUIC" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+        echo "=== TUIC ==="
+        echo "tuic://${UUID_TUIC}:${tuic_encoded}@${host}:${PORT_TUIC}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#tuic${suffix}"
+        echo ""
+    fi
+    
+    if $ENABLE_REALITY; then
+        echo "=== VLESS Reality ==="
+        echo "vless://${UUID}@${host}:${PORT_REALITY}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality${suffix}"
+        echo ""
     fi
 }
 
-# 首次安装尝试调用 sb 进行启动
-info "正在尝试启动服务..."
-/usr/local/bin/sb <<EOF
-2
-0
+# -----------------------
+# [新增] 上报节点信息到后端
+# -----------------------
+report_nodes() {
+    if [ -z "$REPORT_URL" ]; then
+        return 0
+    fi
+
+    info "正在上报节点信息到: $REPORT_URL"
+
+    # 获取节点名称 (使用 hostname)
+    # routes.py 的逻辑是根据 name 字段合并协议，所以这里必须保证同一台机器使用相同的 name
+    NODE_NAME=$(hostname)
+    [ -z "$NODE_NAME" ] && NODE_NAME="SingBox-Node"
+
+    local host="$PUB_IP"
+
+    # 1. 上报 Shadowsocks
+    if $ENABLE_SS; then
+        # 构建 SS 链接
+        local ss_userinfo="${SS_METHOD}:${PSK_SS}"
+        local ss_encoded=$(printf "%s" "$ss_userinfo" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+        local link="ss://${ss_encoded}@${host}:${PORT_SS}#ss-${NODE_NAME}"
+        
+        # 构造 JSON (注意转义引号)
+        local json_data="{\"name\": \"$NODE_NAME\", \"protocol\": \"ss\", \"link\": \"$link\"}"
+        
+        info "-> 上报 SS..."
+        curl -s -X POST -H "Content-Type: application/json" -d "$json_data" "$REPORT_URL" >/dev/null || warn "SS 上报失败"
+    fi
+
+    # 2. 上报 Hysteria2
+    if $ENABLE_HY2; then
+        local hy2_encoded=$(printf "%s" "$PSK_HY2" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+        local link="hy2://${hy2_encoded}@${host}:${PORT_HY2}/?sni=www.bing.com&alpn=h3&insecure=1#hy2-${NODE_NAME}"
+        
+        local json_data="{\"name\": \"$NODE_NAME\", \"protocol\": \"hy2\", \"link\": \"$link\"}"
+        
+        info "-> 上报 HY2..."
+        curl -s -X POST -H "Content-Type: application/json" -d "$json_data" "$REPORT_URL" >/dev/null || warn "HY2 上报失败"
+    fi
+
+    # 3. 上报 TUIC
+    if $ENABLE_TUIC; then
+        local tuic_encoded=$(printf "%s" "$PSK_TUIC" | sed 's/:/%3A/g; s/+/%2B/g; s/\//%2F/g; s/=/%3D/g')
+        local link="tuic://${UUID_TUIC}:${tuic_encoded}@${host}:${PORT_TUIC}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#tuic-${NODE_NAME}"
+        
+        local json_data="{\"name\": \"$NODE_NAME\", \"protocol\": \"tuic\", \"link\": \"$link\"}"
+        
+        info "-> 上报 TUIC..."
+        curl -s -X POST -H "Content-Type: application/json" -d "$json_data" "$REPORT_URL" >/dev/null || warn "TUIC 上报失败"
+    fi
+
+    # 4. 上报 Reality (VLESS)
+    if $ENABLE_REALITY; then
+        local link="vless://${UUID}@${host}:${PORT_REALITY}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality-${NODE_NAME}"
+        
+        # 注意: 后端 routes.py 接收 protocol='vless'
+        local json_data="{\"name\": \"$NODE_NAME\", \"protocol\": \"vless\", \"link\": \"$link\"}"
+        
+        info "-> 上报 Reality..."
+        curl -s -X POST -H "Content-Type: application/json" -d "$json_data" "$REPORT_URL" >/dev/null || warn "Reality 上报失败"
+    fi
+    
+    info "✅ 上报流程结束"
+}
+
+# -----------------------
+# 最终输出
+echo ""
+echo "=========================================="
+info "🎉 Sing-box 部署完成!"
+echo "=========================================="
+echo ""
+info "📋 配置信息:"
+$ENABLE_SS && echo "   SS 端口: $PORT_SS | 密码: $PSK_SS | 加密: $SS_METHOD"
+$ENABLE_HY2 && echo "   HY2 端口: $PORT_HY2 | 密码: $PSK_HY2"
+$ENABLE_TUIC && echo "   TUIC 端口: $PORT_TUIC | UUID: $UUID_TUIC | 密码: $PSK_TUIC"
+$ENABLE_REALITY && echo "   Reality 端口: $PORT_REALITY | UUID: $UUID"
+echo "   服务器: $PUB_IP"
+echo "   Reality server_name(SNI): ${REALITY_SNI:-addons.mozilla.org}"
+echo ""
+info "📂 文件位置:"
+echo "   配置: $CONFIG_PATH"
+($ENABLE_HY2 || $ENABLE_TUIC) && echo "   证书: /etc/sing-box/certs/"
+echo "   服务: $SERVICE_PATH"
+echo ""
+info "📜 客户端链接:"
+generate_uris | while IFS= read -r line; do
+    echo "   $line"
+done
+echo ""
+info "🔧 管理命令:"
+if [ "$OS" = "alpine" ]; then
+    echo "   启动: rc-service sing-box start"
+    echo "   停止: rc-service sing-box stop"
+    echo "   重启: rc-service sing-box restart"
+    echo "   状态: rc-service sing-box status"
+    echo "   日志: tail -f /var/log/sing-box.log"
+else
+    echo "   启动: systemctl start sing-box"
+    echo "   停止: systemctl stop sing-box"
+    echo "   重启: systemctl restart sing-box"
+    echo "   状态: systemctl status sing-box"
+    echo "   日志: journalctl -u sing-box -f"
+fi
+echo ""
+echo "=========================================="
+
+# [新增] 执行上报
+report_nodes
+
+# -----------------------
+# 创建 sb 管理脚本
+SB_PATH="/usr/local/bin/sb"
+info "正在创建 sb 管理面板: $SB_PATH"
+
+cat > "$SB_PATH" <<'SB_SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }
+warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
+err()  { echo -e "\033[1;31m[ERR]\033[0m $*" >&2; }
+
+CONFIG_PATH="/etc/sing-box/config.json"
+CACHE_FILE="/etc/sing-box/.config_cache"
+SERVICE_NAME="sing-box"
+
+# 检测系统
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        ID="${ID:-}"
+        ID_LIKE="${ID_LIKE:-}"
+    else
+        ID=""
+        ID_LIKE=""
+    fi
+
+    if echo "$ID $ID_LIKE" | grep -qi "alpine"; then
+        OS="alpine"
+    elif echo "$ID $ID_LIKE" | grep -Ei "debian|ubuntu" >/dev/null; then
+        OS="debian"
+    elif echo "$ID $ID_LIKE" | grep -Ei "centos|rhel|fedora" >/dev/null; then
+        OS="redhat"
+    else
+        OS="unknown"
+    fi
+}
+
+detect_os
+
+# 服务控制
+service_start() {
+    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" start || systemctl start "$SERVICE_NAME"
+}
+service_stop() {
+    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" stop || systemctl stop "$SERVICE_NAME"
+}
+service_restart() {
+    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" restart || systemctl restart "$SERVICE_NAME"
+}
+service_status() {
+    [ "$OS" = "alpine" ] && rc-service "$SERVICE_NAME" status || systemctl status "$SERVICE_NAME" --no-pager
+}
+
+# 生成随机值
+rand_port() { shuf -i 10000-60000 -n 1 2>/dev/null || echo $((RANDOM % 50001 + 10000)); }
+rand_pass() { openssl rand -base64 16 | tr -d '\n\r' || head -c 16 /dev/urandom | base64 | tr -d '\n\r'; }
+rand_uuid() { cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16 | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\1\2\3\4-\5\6-\7\8-\9\10-\11\12\13\14\15\16/'; }
+
+# URL 编码
+url_encode() {
+    printf "%s" "$1" | sed -e 's/%/%25/g' -e 's/:/%3A/g' -e 's/+/%2B/g' -e 's/\//%2F/g' -e 's/=/%3D/g'
+}
+
+# 读取配置
+read_config() {
+    if [ ! -f "$CONFIG_PATH" ]; then
+        err "未找到配置文件: $CONFIG_PATH"
+        return 1
+    fi
+    
+    # 优先加载 .protocols 文件（确认协议标记）
+    PROTOCOL_FILE="/etc/sing-box/.protocols"
+    if [ -f "$PROTOCOL_FILE" ]; then
+        . "$PROTOCOL_FILE"
+    fi
+    
+    # 加载缓存文件（包含端口密码等详细配置）
+    if [ -f "$CACHE_FILE" ]; then
+        . "$CACHE_FILE"
+    fi
+    
+    # 确保有默认值
+    REALITY_SNI="${REALITY_SNI:-addons.mozilla.org}"
+    CUSTOM_IP="${CUSTOM_IP:-}"
+
+    # 读取各协议配置
+    if [ "${ENABLE_SS:-false}" = "true" ]; then
+        SS_PORT=$(jq -r '.inbounds[] | select(.type=="shadowsocks") | .listen_port // empty' "$CONFIG_PATH" | head -n1)
+        SS_PSK=$(jq -r '.inbounds[] | select(.type=="shadowsocks") | .password // empty' "$CONFIG_PATH" | head -n1)
+        SS_METHOD=$(jq -r '.inbounds[] | select(.type=="shadowsocks") | .method // empty' "$CONFIG_PATH" | head -n1)
+    fi
+    
+    if [ "${ENABLE_HY2:-false}" = "true" ]; then
+        HY2_PORT=$(jq -r '.inbounds[] | select(.type=="hysteria2") | .listen_port // empty' "$CONFIG_PATH" | head -n1)
+        HY2_PSK=$(jq -r '.inbounds[] | select(.type=="hysteria2") | .users[0].password // empty' "$CONFIG_PATH" | head -n1)
+    fi
+    
+    if [ "${ENABLE_TUIC:-false}" = "true" ]; then
+        TUIC_PORT=$(jq -r '.inbounds[] | select(.type=="tuic") | .listen_port // empty' "$CONFIG_PATH" | head -n1)
+        TUIC_UUID=$(jq -r '.inbounds[] | select(.type=="tuic") | .users[0].uuid // empty' "$CONFIG_PATH" | head -n1)
+        TUIC_PSK=$(jq -r '.inbounds[] | select(.type=="tuic") | .users[0].password // empty' "$CONFIG_PATH" | head -n1)
+    fi
+    
+    if [ "${ENABLE_REALITY:-false}" = "true" ]; then
+        REALITY_PORT=$(jq -r '.inbounds[] | select(.type=="vless") | .listen_port // empty' "$CONFIG_PATH" | head -n1)
+        REALITY_UUID=$(jq -r '.inbounds[] | select(.type=="vless") | .users[0].uuid // empty' "$CONFIG_PATH" | head -n1)
+        REALITY_PK=$(jq -r '.inbounds[] | select(.type=="vless") | .tls.reality.private_key // empty' "$CONFIG_PATH" | head -n1)
+        REALITY_SID=$(jq -r '.inbounds[] | select(.type=="vless") | .tls.reality.short_id[0] // empty' "$CONFIG_PATH" | head -n1)
+        [ -f /etc/sing-box/.reality_pub ] && REALITY_PUB=$(cat /etc/sing-box/.reality_pub)
+    fi
+}
+
+# 获取公网IP（原始方法）
+get_public_ip() {
+    local ip=""
+    for url in "https://api.ipify.org" "https://ipinfo.io/ip" "https://ifconfig.me"; do
+        ip=$(curl -s --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]')
+        [ -n "$ip" ] && echo "$ip" && return 0
+    done
+    echo "YOUR_SERVER_IP"
+}
+
+# 生成并保存URI
+generate_uris() {
+    read_config || return 1
+
+    # 优先使用用户自定义入口 IP
+    if [ -n "${CUSTOM_IP:-}" ]; then
+        PUBLIC_IP="$CUSTOM_IP"
+    else
+        PUBLIC_IP=$(get_public_ip)
+    fi
+
+    node_suffix=$(cat /root/node_names.txt 2>/dev/null || echo "")
+    
+    URI_FILE="/etc/sing-box/uris.txt"
+    > "$URI_FILE"
+    
+    if [ "${ENABLE_SS:-false}" = "true" ]; then
+        ss_userinfo="${SS_METHOD}:${SS_PSK}"
+        ss_encoded=$(url_encode "$ss_userinfo")
+        ss_b64=$(printf "%s" "$ss_userinfo" | base64 -w0 2>/dev/null || printf "%s" "$ss_userinfo" | base64 | tr -d '\n')
+        
+        echo "=== Shadowsocks (SS) ===" >> "$URI_FILE"
+        echo "ss://${ss_encoded}@${PUBLIC_IP}:${SS_PORT}#ss${node_suffix}" >> "$URI_FILE"
+        echo "ss://${ss_b64}@${PUBLIC_IP}:${SS_PORT}#ss${node_suffix}" >> "$URI_FILE"
+        echo "" >> "$URI_FILE"
+    fi
+    
+    if [ "${ENABLE_HY2:-false}" = "true" ]; then
+        hy2_encoded=$(url_encode "$HY2_PSK")
+        echo "=== Hysteria2 (HY2) ===" >> "$URI_FILE"
+        echo "hy2://${hy2_encoded}@${PUBLIC_IP}:${HY2_PORT}/?sni=www.bing.com&alpn=h3&insecure=1#hy2${node_suffix}" >> "$URI_FILE"
+        echo "" >> "$URI_FILE"
+    fi
+    
+    if [ "${ENABLE_TUIC:-false}" = "true" ]; then
+        tuic_encoded=$(url_encode "$TUIC_PSK")
+        echo "=== TUIC ===" >> "$URI_FILE"
+        echo "tuic://${TUIC_UUID}:${tuic_encoded}@${PUBLIC_IP}:${TUIC_PORT}/?congestion_control=bbr&alpn=h3&sni=www.bing.com&insecure=1#tuic${node_suffix}" >> "$URI_FILE"
+        echo "" >> "$URI_FILE"
+    fi
+    
+    if [ "${ENABLE_REALITY:-false}" = "true" ]; then
+        REALITY_SNI="${REALITY_SNI:-addons.mozilla.org}"
+        echo "=== VLESS Reality ===" >> "$URI_FILE"
+        echo "vless://${REALITY_UUID}@${PUBLIC_IP}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality${node_suffix}" >> "$URI_FILE"
+        echo "" >> "$URI_FILE"
+    fi
+    
+    info "URI 已保存到: $URI_FILE"
+}
+
+# 查看URI
+action_view_uri() {
+    info "正在生成并显示 URI..."
+    generate_uris || { err "生成 URI 失败"; return 1; }
+    echo ""
+    cat /etc/sing-box/uris.txt
+}
+
+# 查看配置文件路径
+action_view_config() {
+    echo "$CONFIG_PATH"
+}
+
+# 编辑配置
+action_edit_config() {
+    if [ ! -f "$CONFIG_PATH" ]; then
+        err "配置文件不存在: $CONFIG_PATH"
+        return 1
+    fi
+    
+    ${EDITOR:-nano} "$CONFIG_PATH" 2>/dev/null || ${EDITOR:-vi} "$CONFIG_PATH"
+    
+    if command -v sing-box >/dev/null 2>&1; then
+        if sing-box check -c "$CONFIG_PATH" >/dev/null 2>&1; then
+            info "配置校验通过,已重启服务"
+            service_restart || warn "重启失败"
+            generate_uris || true
+        else
+            warn "配置校验失败,服务未重启"
+        fi
+    fi
+}
+
+# 重置SS端口
+action_reset_ss() {
+    read_config || return 1
+    
+    if [ "${ENABLE_SS:-false}" != "true" ]; then
+        err "SS 协议未启用"
+        return 1
+    fi
+    
+    read -p "输入新的 SS 端口(回车保持 $SS_PORT): " new_port
+    new_port="${new_port:-$SS_PORT}"
+    
+    info "正在停止服务..."
+    service_stop || warn "停止服务失败"
+    
+    cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
+    
+    jq --argjson port "$new_port" '
+    .inbounds |= map(if .type=="shadowsocks" then .listen_port = $port else . end)
+    ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+    
+    info "已启动服务并更新 SS 端口: $new_port"
+    service_start || warn "启动服务失败"
+    sleep 1
+    generate_uris || warn "生成 URI 失败"
+}
+
+# 重置HY2端口
+action_reset_hy2() {
+    read_config || return 1
+    
+    if [ "${ENABLE_HY2:-false}" != "true" ]; then
+        err "HY2 协议未启用"
+        return 1
+    fi
+    
+    read -p "输入新的 HY2 端口(回车保持 $HY2_PORT): " new_port
+    new_port="${new_port:-$HY2_PORT}"
+    
+    info "正在停止服务..."
+    service_stop || warn "停止服务失败"
+    
+    cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
+    
+    jq --argjson port "$new_port" '
+    .inbounds |= map(if .type=="hysteria2" then .listen_port = $port else . end)
+    ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+    
+    info "已启动服务并更新 HY2 端口: $new_port"
+    service_start || warn "启动服务失败"
+    sleep 1
+    generate_uris || warn "生成 URI 失败"
+}
+
+# 重置TUIC端口
+action_reset_tuic() {
+    read_config || return 1
+    
+    if [ "${ENABLE_TUIC:-false}" != "true" ]; then
+        err "TUIC 协议未启用"
+        return 1
+    fi
+    
+    read -p "输入新的 TUIC 端口(回车保持 $TUIC_PORT): " new_port
+    new_port="${new_port:-$TUIC_PORT}"
+    
+    info "正在停止服务..."
+    service_stop || warn "停止服务失败"
+    
+    cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
+    
+    jq --argjson port "$new_port" '
+    .inbounds |= map(if .type=="tuic" then .listen_port = $port else . end)
+    ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+    
+    info "已启动服务并更新 TUIC 端口: $new_port"
+    service_start || warn "启动服务失败"
+    sleep 1
+    generate_uris || warn "生成 URI 失败"
+}
+
+# 重置Reality端口
+action_reset_reality() {
+    read_config || return 1
+    
+    if [ "${ENABLE_REALITY:-false}" != "true" ]; then
+        err "Reality 协议未启用"
+        return 1
+    fi
+    
+    read -p "输入新的 Reality 端口(回车保持 $REALITY_PORT): " new_port
+    new_port="${new_port:-$REALITY_PORT}"
+    
+    info "正在停止服务..."
+    service_stop || warn "停止服务失败"
+    
+    cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
+    
+    jq --argjson port "$new_port" '
+    .inbounds |= map(if .type=="vless" then .listen_port = $port else . end)
+    ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+    
+    info "已启动服务并更新 Reality 端口: $new_port"
+    service_start || warn "启动服务失败"
+    sleep 1
+    generate_uris || warn "生成 URI 失败"
+}
+
+# 更新sing-box
+action_update() {
+    info "开始更新 sing-box..."
+    if [ "$OS" = "alpine" ]; then
+        apk update && apk upgrade sing-box || bash <(curl -fsSL https://sing-box.app/install.sh)
+    else
+        bash <(curl -fsSL https://sing-box.app/install.sh)
+    fi
+    
+    info "更新完成,已重启服务..."
+    if command -v sing-box >/dev/null 2>&1; then
+        NEW_VER=$(sing-box version 2>/dev/null | head -n1)
+        info "当前版本: $NEW_VER"
+        service_restart || warn "重启失败"
+    fi
+}
+
+# 卸载
+action_uninstall() {
+    read -p "确认卸载 sing-box?(y/N): " confirm
+    [[ ! "$confirm" =~ ^[Yy]$ ]] && info "已取消" && return 0
+    
+    info "正在卸载..."
+    service_stop || true
+    if [ "$OS" = "alpine" ]; then
+        rc-update del sing-box default 2>/dev/null || true
+        rm -f /etc/init.d/sing-box
+        apk del sing-box 2>/dev/null || true
+    else
+        systemctl stop sing-box 2>/dev/null || true
+        systemctl disable sing-box 2>/dev/null || true
+        rm -f /etc/systemd/system/sing-box.service
+        systemctl daemon-reload 2>/dev/null || true
+        apt purge -y sing-box >/dev/null 2>&1 || true
+    fi
+    rm -rf /etc/sing-box /var/log/sing-box* /usr/local/bin/sb /usr/bin/sing-box /root/node_names.txt 2>/dev/null || true
+    info "卸载完成"
+}
+
+# 生成线路机脚本
+action_generate_relay() {
+    read_config || return 1
+    
+    # 检查是否启用了SS
+    if [ "${ENABLE_SS:-false}" != "true" ]; then
+        warn "未检测到 SS 协议,需要先部署 SS 作为入站"
+        read -p "是否现在部署 SS 协议?(y/N): " deploy_ss
+        if [[ "$deploy_ss" =~ ^[Yy]$ ]]; then
+            info "开始部署 SS 协议..."
+            
+            # 让用户选择端口
+            read -p "请输入 SS 端口(留空则随机 10000-60000): " USER_SS_PORT
+            SS_PORT="${USER_SS_PORT:-$(rand_port)}"
+            SS_PSK=$(rand_pass)
+            SS_METHOD="aes-128-gcm"
+            
+            info "SS 端口: $SS_PORT | 密码已自动生成"
+            
+            info "正在停止服务..."
+            service_stop || warn "停止服务失败"
+            
+            cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
+            
+            # 添加 SS inbound
+            jq --argjson port "$SS_PORT" --arg psk "$SS_PSK" '
+            .inbounds += [{
+              "type": "shadowsocks",
+              "listen": "::",
+              "listen_port": $port,
+              "method": "aes-128-gcm",
+              "password": $psk,
+              "tag": "ss-in"
+            }]
+            ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+            
+            # 更新缓存和协议标记
+            sed -i 's/ENABLE_SS=false/ENABLE_SS=true/' "$CACHE_FILE" 2>/dev/null || echo "ENABLE_SS=true" >> "$CACHE_FILE"
+            echo "SS_PORT=$SS_PORT" >> "$CACHE_FILE"
+            echo "SS_PSK=$SS_PSK" >> "$CACHE_FILE"
+            echo "SS_METHOD=$SS_METHOD" >> "$CACHE_FILE"
+            
+            # 同步更新协议标记文件
+            PROTOCOL_FILE="/etc/sing-box/.protocols"
+            if [ -f "$PROTOCOL_FILE" ]; then
+                sed -i 's/ENABLE_SS=false/ENABLE_SS=true/' "$PROTOCOL_FILE"
+            else
+                echo "ENABLE_SS=true" >> "$PROTOCOL_FILE"
+            fi
+            
+            # 更新当前会话变量
+            ENABLE_SS=true
+            
+            info "SS 已部署 - 端口: $SS_PORT"
+            service_start || warn "启动服务失败"
+            sleep 1
+            
+            # 重新读取配置
+            read_config
+        else
+            err "取消生成线路机脚本"
+            return 1
+        fi
+    fi
+    
+    # 线路机模板使用 CUSTOM_IP（若设置）或当前公共 IP
+    if [ -n "${CUSTOM_IP:-}" ]; then
+        INBOUND_IP="${CUSTOM_IP}"
+    else
+        INBOUND_IP="$(get_public_ip)"
+    fi
+
+    PUBLIC_IP="$INBOUND_IP"
+    RELAY_SCRIPT="/tmp/relay-install.sh"
+    
+    info "正在生成线路机脚本: $RELAY_SCRIPT"
+    
+    cat > "$RELAY_SCRIPT" <<'RELAY_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+info() { echo -e "\033[1;34m[INFO]\033[0m $*"; }
+err()  { echo -e "\033[1;31m[ERR]\033[0m $*" >&2; }
+
+[ "$(id -u)" != "0" ] && err "必须以 root 运行" && exit 1
+
+detect_os(){
+    . /etc/os-release 2>/dev/null || true
+    case "${ID:-}" in
+        alpine) OS=alpine ;;
+        debian|ubuntu) OS=debian ;;
+        centos|rhel|fedora) OS=redhat ;;
+        *) OS=unknown ;;
+    esac
+}
+detect_os
+
+info "安装依赖..."
+case "$OS" in
+    alpine) apk update; apk add --no-cache curl jq bash openssl ca-certificates ;;
+    debian) apt-get update -y; apt-get install -y curl jq bash openssl ca-certificates ;;
+    redhat) yum install -y curl jq bash openssl ca-certificates ;;
+esac
+
+info "安装 sing-box..."
+case "$OS" in
+    alpine) apk add --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community sing-box ;;
+    *) bash <(curl -fsSL https://sing-box.app/install.sh) ;;
+esac
+
+UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "00000000-0000-0000-0000-000000000000")
+
+info "生成 Reality 密钥对"
+REALITY_KEYS=$(sing-box generate reality-keypair 2>/dev/null || echo "")
+REALITY_PK=$(echo "$REALITY_KEYS" | grep "PrivateKey" | awk '{print $NF}' | tr -d '\r' || echo "")
+REALITY_PUB=$(echo "$REALITY_KEYS" | grep "PublicKey" | awk '{print $NF}' | tr -d '\r' || echo "")
+REALITY_SID=$(sing-box generate rand 8 --hex 2>/dev/null || echo "0123456789abcdef")
+
+read -p "请输入线路机监听端口(留空随机 20000-65000): " USER_PORT
+LISTEN_PORT="${USER_PORT:-$(shuf -i 20000-65000 -n 1 2>/dev/null || echo 20443)}"
+
+mkdir -p /etc/sing-box
+
+cat > /etc/sing-box/config.json <<EOF
+{
+  "log": { "level": "info", "timestamp": true },
+  "inbounds": [
+    {
+      "type": "vless",
+      "listen": "::",
+      "listen_port": $LISTEN_PORT,
+      "sniff": true,
+      "users": [{ "uuid": "$UUID", "flow": "xtls-rprx-vision" }],
+      "tls": {
+        "enabled": true,
+        "server_name": "__REALITY_SNI__",
+        "reality": {
+          "enabled": true,
+          "handshake": { "server": "__REALITY_SNI__", "server_port": 443 },
+          "private_key": "$REALITY_PK",
+          "short_id": ["$REALITY_SID"]
+        }
+      },
+      "tag": "vless-in"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "shadowsocks",
+      "server": "__INBOUND_IP__",
+      "server_port": __INBOUND_PORT__,
+      "method": "__INBOUND_METHOD__",
+      "password": "__INBOUND_PASSWORD__",
+      "tag": "relay-out"
+    },
+    { "type": "direct", "tag": "direct-out" }
+  ],
+  "route": { "rules": [{ "inbound": "vless-in", "outbound": "relay-out" }] }
+}
 EOF
 
-if pgrep -x "sing-box" >/dev/null; then
-    print_info
+if [ "$OS" = "alpine" ]; then
+    cat > /etc/init.d/sing-box <<'SVC'
+#!/sbin/openrc-run
+name="sing-box"
+command="/usr/bin/sing-box"
+command_args="run -c /etc/sing-box/config.json"
+command_background="yes"
+pidfile="/run/sing-box.pid"
+supervisor=supervise-daemon
+supervise_daemon_args="--respawn-max 0 --respawn-delay 5"
+
+depend() { need net; }
+SVC
+    chmod +x /etc/init.d/sing-box
+    rc-update add sing-box default
+    rc-service sing-box restart
 else
-    warn "服务似乎未启动，请运行 'sb' 并选择 '5) 诊断模式' 查看原因。"
+    cat > /etc/systemd/system/sing-box.service <<'SYSTEMD'
+[Unit]
+Description=Sing-box Relay
+After=network.target
+[Service]
+ExecStart=/usr/bin/sing-box run -c /etc/sing-box/config.json
+Restart=on-failure
+RestartSec=10s
+[Install]
+WantedBy=multi-user.target
+SYSTEMD
+    systemctl daemon-reload
+    systemctl enable sing-box
+    systemctl restart sing-box
 fi
 
+PUB_IP=$(curl -s https://api.ipify.org 2>/dev/null || echo "YOUR_RELAY_IP")
+
+# 生成并保存链接
+RELAY_URI="vless://$UUID@$PUB_IP:$LISTEN_PORT?encryption=none&flow=xtls-rprx-vision&security=reality&sni=__REALITY_SNI__&fp=chrome&pbk=$REALITY_PUB&sid=$REALITY_SID#relay"
+
+mkdir -p /etc/sing-box
+echo "$RELAY_URI" > /etc/sing-box/relay_uri.txt
+
 echo ""
-info "🎉 安装完成! 输入 'sb' 可调用管理菜单。"
+info "✅ 安装完成"
+echo "=============== 中转节点 Reality 链接 ==============="
+echo "$RELAY_URI"
+echo "===================================================="
+echo ""
+info "💡 链接已保存到: /etc/sing-box/relay_uri.txt"
+info "💡 查看链接命令: cat /etc/sing-box/relay_uri.txt"
+RELAY_EOF
+
+    # 替换占位符（INBOUND_IP/PORT/METHOD/PASSWORD 同时替换 REALITY_SNI）
+    sed -i "s|__INBOUND_IP__|$INBOUND_IP|g" "$RELAY_SCRIPT"
+    sed -i "s|__INBOUND_PORT__|$SS_PORT|g" "$RELAY_SCRIPT"
+    sed -i "s|__INBOUND_METHOD__|$SS_METHOD|g" "$RELAY_SCRIPT"
+    sed -i "s|__INBOUND_PASSWORD__|$SS_PSK|g" "$RELAY_SCRIPT"
+    sed -i "s|__REALITY_SNI__|${REALITY_SNI:-addons.mozilla.org}|g" "$RELAY_SCRIPT"
+    
+    chmod +x "$RELAY_SCRIPT"
+    
+    info "✅ 线路机脚本已生成: $RELAY_SCRIPT"
+    echo ""
+    info "请复制以下内容到线路机执行:"
+    echo "----------------------------------------"
+    cat "$RELAY_SCRIPT"
+    echo "----------------------------------------"
+    echo ""
+    info "在线路机执行命令示例："
+    echo "   nano /tmp/relay-install.sh 保存后执行"
+    echo "   chmod +x /tmp/relay-install.sh && bash /tmp/relay-install.sh"
+    echo ""
+    info "复制执行完成后，即可在线路机完成 sing-box 中转节点部署。"
+}
+
+# 动态生成菜单
+show_menu() {
+    read_config 2>/dev/null || true
+    
+    cat <<'MENU'
+
+==========================
+ Sing-box 管理面板 (快速指令sb)
+==========================
+1) 查看协议链接
+2) 查看配置文件路径
+3) 编辑配置文件
+MENU
+
+    # 构建协议重置选项映射
+    declare -g -A MENU_MAP
+    local option=4
+    
+    if [ "${ENABLE_SS:-false}" = "true" ]; then
+        echo "$option) 重置 SS 端口"
+        MENU_MAP[$option]="reset_ss"
+        option=$((option + 1))
+    fi
+    
+    if [ "${ENABLE_HY2:-false}" = "true" ]; then
+        echo "$option) 重置 HY2 端口"
+        MENU_MAP[$option]="reset_hy2"
+        option=$((option + 1))
+    fi
+    
+    if [ "${ENABLE_TUIC:-false}" = "true" ]; then
+        echo "$option) 重置 TUIC 端口"
+        MENU_MAP[$option]="reset_tuic"
+        option=$((option + 1))
+    fi
+    
+    if [ "${ENABLE_REALITY:-false}" = "true" ]; then
+        echo "$option) 重置 Reality 端口"
+        MENU_MAP[$option]="reset_reality"
+        option=$((option + 1))
+    fi
+    
+    # 固定功能选项
+    MENU_MAP[$option]="start"
+    echo "$option) 启动服务"
+    option=$((option + 1))
+    
+    MENU_MAP[$option]="stop"
+    echo "$((option))) 停止服务"
+    option=$((option + 1))
+    
+    MENU_MAP[$option]="restart"
+    echo "$((option))) 重启服务"
+    option=$((option + 1))
+    
+    MENU_MAP[$option]="status"
+    echo "$((option))) 查看状态"
+    option=$((option + 1))
+    
+    MENU_MAP[$option]="update"
+    echo "$((option))) 更新 sing-box"
+    option=$((option + 1))
+    
+    MENU_MAP[$option]="relay"
+    echo "$((option))) 生成线路机脚本(出口为本机ss协议)"
+    option=$((option + 1))
+    
+    MENU_MAP[$option]="uninstall"
+    echo "$((option))) 卸载 sing-box"
+    
+    cat <<MENU2
+0) 退出
+==========================
+MENU2
+}
+
+# 主循环
+while true; do
+    show_menu
+    read -p "请输入选项: " opt
+    
+    # 处理退出
+    if [ "$opt" = "0" ]; then
+        exit 0
+    fi
+    
+    # 处理固定选项
+    case "$opt" in
+        1) action_view_uri ;;
+        2) action_view_config ;;
+        3) action_edit_config ;;
+        *)
+            # 处理动态选项
+            action="${MENU_MAP[$opt]:-}"
+            case "$action" in
+                reset_ss) action_reset_ss ;;
+                reset_hy2) action_reset_hy2 ;;
+                reset_tuic) action_reset_tuic ;;
+                reset_reality) action_reset_reality ;;
+                start) service_start && info "已启动" ;;
+                stop) service_stop && info "已停止" ;;
+                restart) service_restart && info "已重启" ;;
+                status) service_status ;;
+                update) action_update ;;
+                relay) action_generate_relay ;;
+                uninstall) action_uninstall; exit 0 ;;
+                *) warn "无效选项: $opt" ;;
+            esac
+            ;;
+    esac
+    
+    echo ""
+done
+SB_SCRIPT
+
+chmod +x "$SB_PATH"
+info "✅ 管理面板已创建,可输入 sb 打开管理面板"

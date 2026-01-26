@@ -21,10 +21,23 @@ def safe_base64_decode(s):
         return None
 
 def get_emoji_flag(region_code):
-    """根据地区代码获取 Emoji"""
-    if region_code: 
-        return region_code.strip()
-    return '🌐'
+    """根据地区代码获取 Emoji (将 US 转为 🇺🇸)"""
+    if not region_code: return '🌐'
+    
+    try:
+        code = str(region_code).upper().strip()
+        
+        # 核心逻辑：将字母转为区域指示符 Emoji
+        # A (65) -> 🇦 (127462)
+        # 偏移量 = 127462 - 65 = 127397
+        if len(code) == 2 and code.isalpha():
+            OFFSET = 127397
+            return "".join([chr(ord(c) + OFFSET) for c in code])
+        
+        # 如果不是2位字母（比如已经是 Emoji 或者 'LOC'），原样返回
+        return code
+    except:
+        return '🌐'
 
 def _get_param(params, key, default=''):
     """获取参数的第一个值"""

@@ -501,6 +501,8 @@ def _parse_ss(link, proxy_name, params=None):
         if '@' in body:
             userinfo_part, host_part = body.rsplit('@', 1)
             
+            userinfo_part = urllib.parse.unquote(userinfo_part)
+
             if ':' not in userinfo_part:
                 decoded_user = safe_base64_decode(userinfo_part)
                 if decoded_user: userinfo_part = decoded_user

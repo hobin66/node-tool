@@ -4,7 +4,6 @@ tproxy-port: 1536
 ipv6: true
 mode: Rule
 allow-lan: true
-disable-keep-alive: true
 geodata-mode: true
 geo-auto-update: false
 geo-update-interval: 24
@@ -22,15 +21,6 @@ tcp-concurrent: true
 log-level: silent
 find-process-mode: always
 global-client-fingerprint: chrome
-
-external-controller: 0.0.0.0:7788
-secret: "123456"
-external-ui: WebUI/ZashBoard
-external-ui-url: "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip"
-external-controller-cors:
-  allow-origins:
-    - "*"
-  allow-private-network: true
 
 
 # -------------------- 订阅提供商 --------------------
@@ -98,19 +88,6 @@ tun:
   strict-route: true
   auto-redirect: false
   auto-detect-interface: true
-  exclude-package:
-    # _____________________# 三星专供 ↓ 范围
-#    - com.samsung.android.messaging
-#    - com.samsung.android.app.telephonyui
-#    - com.samsung.android.dialer
-#    - com.samsung.android.incallui
-#    - com.samsung.android.smartcallprovider
-#    - com.samsung.android.intellivoiceservice
-#    - com.android.settings
-#    - com.qti.qcc
-#    - com.sec.epdg
-#    - com.sec.imsservice
-
 
 dns:
   enable: true

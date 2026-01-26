@@ -15,11 +15,39 @@ import time
 import urllib.parse
 import uuid
 from io import BytesIO
+import socket
 
 from ruamel.yaml import YAML
 from .link_parser import parse_proxy_link, get_emoji_flag, extract_nodes_from_content, fix_link_ipv6
 
 bp = Blueprint('subscription', __name__, url_prefix='/subscription', template_folder='templates')
+
+# [新增] IP 归属地查询辅助函数
+def get_ip_region(host):
+    """
+    输入 IP 或域名，返回国家代码 (例如 'US', 'HK', 'CN')
+    使用 ip-api.com 免费接口 (限制 45次/分，足够个人使用)
+    """
+    if not host: return ''
+    try:
+        # 1. 尝试解析域名为 IP (可选，ip-api 其实支持域名，但转 IP 更稳)
+        # import socket  <-- 记得在文件最顶部确认 import socket，如果没有就加上，或者直接传域名
+        try:
+            target = socket.gethostbyname(host)
+        except:
+            target = host # 解析失败则直接用原值尝试
+
+        # 2. 调用 API
+        url = f"http://ip-api.com/json/{target}?fields=status,countryCode"
+        resp = requests.get(url, timeout=3) # 设置短超时，防止卡住
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('status') == 'success':
+                return data.get('countryCode', '') # 返回 'US' 等
+    except Exception as e:
+        print(f"[IP Query Fail] {host}: {e}")
+    
+    return ''
 
 # ---------------------------------------------------------
 # 新增辅助函数：自愈机制
@@ -243,10 +271,11 @@ def sync_nodes_to_files():
                     flag = get_emoji_flag(region)
                     name_prefix = f"{proto.lower()}-"   # DB 节点必须带协议前缀
                 elif origin == 'sub':
-                    flag = ''  # 外部订阅不显示国旗或标志，保留原始名称
-                    name_prefix = ""    # 外部订阅节点：不带任何前缀
+                    flag = ''  # 外部订阅节点：不带任何前缀
+                    name_prefix = ""
                 else:
-                    flag = '📝' # 本地手填标志
+                    # [修改] 如果有地区代码则显示国旗，否则显示备忘录图标
+                    flag = get_emoji_flag(region) if region else '📝'
                     name_prefix = f"{proto.lower()}-"
                 
                 # 2. 构造强制名称：Flag Protocol-Name (例如: 🇸🇬 hy2-SG-NAT1)
@@ -605,26 +634,38 @@ def add_local_node_api():
         name, proto, link = data.get('name'), data.get('protocol'), data.get('link')
         if not all([name, proto, link]): return jsonify({'status': 'error', 'message': '参数不完整'}), 400
         
+        # [新增] 自动查询 IP 归属地 ------------------------------------
+        region_code = ""
+        try:
+            proxy_info = parse_proxy_link(link, "temp", "")
+            if proxy_info and 'server' in proxy_info:
+                region_code = get_ip_region(proxy_info['server'])
+        except: pass
+        # -----------------------------------------------------------
+
         local_nodes = load_local_nodes_raw()
-        # 查找是否存在同名本地节点 (排除 DB 节点)
         target = next((n for n in local_nodes if n['name'] == name and n.get('origin') != 'db'), None)
         
         if target:
             target.setdefault('links', {})[proto] = link
+            if region_code and not target.get('region'):
+                target['region'] = region_code
             msg = f"协议 {proto} 已合并到本地节点 {name}"
         else:
             local_nodes.append({
                 "uuid": str(uuid.uuid4()),
                 "name": name,
                 "links": {proto: link},
-                "routing_type": 1, # 默认直连
+                "routing_type": 1,
                 "origin": "local",
                 "is_fixed": False,
-                "sort_index": 99999
+                "sort_index": 99999,
+                "region": region_code # [新增]
             })
             msg = f"本地节点 {name} 已创建"
             
         save_local_nodes(local_nodes)
+        sync_nodes_to_files() # 记得这里要触发同步
         return jsonify({'status': 'success', 'message': msg})
     except Exception as e: return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -839,7 +880,14 @@ def download_v2ray_base64():
         region = node.get('region', 'LOC')
         
         # 增加对类型的图标判断
-        flag = get_emoji_flag(region) if origin == 'db' else ('📝' if origin == 'local' else '')
+        # [修改] 增加对类型的图标判断
+        if origin == 'db':
+            flag = get_emoji_flag(region)
+        elif origin == 'local':
+            # 优先显示国旗，没有则显示 📝
+            flag = get_emoji_flag(region) if region else '📝'
+        else:
+            flag = ''
         for proto, link in links_dict.items():
             if link and link.strip():
                 # 2. 计算 name_prefix (在协议循环内，使用当前的 proto)
@@ -863,17 +911,34 @@ def download_v2ray_base64():
 
 @bp.route('/api/callback/add_node', methods=['POST'])
 def add_node_callback():
-    """API: 脚本回调自动添加节点 (视为 Local 节点)"""
     try:
         data = request.get_json()
         name, proto, link = data.get('name'), data.get('protocol'), data.get('link')
         if not all([name, proto, link]): return jsonify({'status': 'error', 'message': 'Missing data'}), 400
         
+        # [新增] 自动查询 IP 归属地 ------------------------------------
+        region_code = ""
+        try:
+            # 1. 复用 link_parser 解析出 server 地址
+            # 随便传个名字和region，我们只想要 server 字段
+            proxy_info = parse_proxy_link(link, "temp", "") 
+            if proxy_info and 'server' in proxy_info:
+                server_addr = proxy_info['server']
+                # 2. 查询国家代码
+                region_code = get_ip_region(server_addr)
+                print(f"[Auto Region] {name} ({server_addr}) -> {region_code}")
+        except Exception as e:
+            print(f"[Auto Region Error] {e}")
+        # -----------------------------------------------------------
+
         local_nodes = load_local_nodes_raw()
         target = next((n for n in local_nodes if n['name'] == name and n.get('origin') == 'local'), None)
         
         if target:
             target.setdefault('links', {})[proto] = link
+            # [新增] 如果原有节点没地区，就更新进去
+            if region_code and not target.get('region'):
+                target['region'] = region_code
             msg = f"已合并到节点 {name}"
         else:
             local_nodes.append({
@@ -883,9 +948,11 @@ def add_node_callback():
                 "routing_type": 1,
                 "origin": "local",
                 "is_fixed": False,
-                "sort_index": 99999
+                "sort_index": 99999,
+                "region": region_code  # [新增] 保存国家代码
             })
             msg = f"自动添加节点 {name}"
+        
         save_local_nodes(local_nodes)
         sync_nodes_to_files()
         return jsonify({'status': 'success', 'message': msg})

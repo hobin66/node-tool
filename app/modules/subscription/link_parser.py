@@ -553,6 +553,48 @@ def _parse_ss(link, proxy_name, params=None):
         return None
     return None
 
+def _parse_socks5(parsed, params, proxy_name):
+    """
+    处理 Socks5 协议
+    格式: socks5://user:pass@host:port
+    """
+    userinfo, server, port = parse_netloc_manual(parsed.netloc, 1080)
+    
+    username = parsed.username
+    password = parsed.password
+
+    # 如果 urllib 解析不到(例如包含特殊字符)，尝试从 userinfo 手动提取
+    if userinfo and not username and not password:
+        if ':' in userinfo:
+            try:
+                u, p = userinfo.split(':', 1)
+                username = urllib.parse.unquote(u)
+                password = urllib.parse.unquote(p)
+            except:
+                username = userinfo
+        else:
+            username = userinfo
+
+    proxy = {
+        "name": proxy_name,
+        "type": "socks5",
+        "server": server,
+        "port": port,
+        "udp": True, # Socks5 默认开启 UDP
+        "skip-cert-verify": _get_bool(params, ['insecure', 'skip-cert-verify'])
+    }
+
+    if username: proxy['username'] = username
+    if password: proxy['password'] = password
+    
+    # Clash Meta 支持 socks5 over TLS (虽然标准 socks5 不带 TLS，但有些实现支持)
+    if _get_bool(params, 'tls'):
+        proxy['tls'] = True
+        sni = _get_param(params, 'sni')
+        if sni: proxy['servername'] = sni
+
+    return proxy
+
 # ==============================================================================
 # SECTION 3: 主分发入口 (Main Entry Point)
 # ==============================================================================
@@ -595,6 +637,9 @@ def parse_proxy_link(link, base_name, region_code):
             
         elif lower_link.startswith('ss://'):
             return _parse_ss(link, proxy_name, params)
+            
+        elif lower_link.startswith('socks5://'):
+            return _parse_socks5(parsed, params, proxy_name)
             
     except Exception as e:
         print(f"Link Parse Error [{link[:30]}...]: {e}")

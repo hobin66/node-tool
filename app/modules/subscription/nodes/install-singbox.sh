@@ -17,6 +17,12 @@ FIXED_REALITY_SNI="learn.microsoft.com"
 # Shadowsocks 加密方式
 # 常用推荐: 2022-blake3-aes-128-gcm (性能最好), aes-128-gcm (兼容性好)
 FIXED_SS_METHOD="2022-blake3-aes-128-gcm"
+# SOCKS5 端口
+FIXED_PORT_SOCKS5=10005
+# SOCKS5 默认账号 (建议修改)
+FIXED_SOCKS5_USER="admin"
+# SOCKS5 默认密码 (自动生成随机，也可以写死)
+FIXED_SOCKS5_PASS="MySuperSecretPass123"
 # ==========================================
 # 自动上报地址 (默认为空，由命令行参数 --report 传入)
 REPORT_URL=""
@@ -152,6 +158,7 @@ select_protocols() {
     ENABLE_HY2=false
     ENABLE_TUIC=false
     ENABLE_REALITY=false
+    ENABLE_SOCKS5=false
     
     # 判断是否有传入参数（参数大于0个）
     if [ $# -gt 0 ]; then
@@ -189,6 +196,10 @@ select_protocols() {
                     ENABLE_REALITY=true 
                     info "-> 启用 VLESS Reality"
                     ;;
+                socks5|socks)
+                    ENABLE_SOCKS5=true
+                    info "-> 启用 SOCKS5"
+                    ;;
                 *) 
                     warn "忽略未知参数: $arg" 
                     ;;
@@ -197,7 +208,7 @@ select_protocols() {
         done
         
         # 检查是否命中至少一个协议
-        if ! $ENABLE_SS && ! $ENABLE_HY2 && ! $ENABLE_TUIC && ! $ENABLE_REALITY; then
+        if ! $ENABLE_SS && ! $ENABLE_HY2 && ! $ENABLE_TUIC && ! $ENABLE_REALITY && ! $ENABLE_SOCKS5; then
             err "提供的参数无效，未选中任何协议！"
             exit 1
         fi
@@ -209,6 +220,7 @@ select_protocols() {
         echo "2) Hysteria2 (HY2)"
         echo "3) TUIC"
         echo "4) VLESS Reality"
+        echo "5) SOCKS5"
         echo ""
         echo "请输入要部署的协议编号(多个用空格分隔,如: 1 2 4):"
         read -r protocol_input
@@ -219,11 +231,12 @@ select_protocols() {
                 2) ENABLE_HY2=true ;;
                 3) ENABLE_TUIC=true ;;
                 4) ENABLE_REALITY=true ;;
+                5) ENABLE_SOCKS5=true ;;
                 *) warn "无效选项: $num" ;;
             esac
         done
         
-        if ! $ENABLE_SS && ! $ENABLE_HY2 && ! $ENABLE_TUIC && ! $ENABLE_REALITY; then
+        if ! $ENABLE_SS && ! $ENABLE_HY2 && ! $ENABLE_TUIC && ! $ENABLE_REALITY && ! $ENABLE_SOCKS5; then
             err "未选择任何协议,退出安装"
             exit 1
         fi
@@ -233,6 +246,7 @@ select_protocols() {
         $ENABLE_HY2 && echo "  - Hysteria2"
         $ENABLE_TUIC && echo "  - TUIC"
         $ENABLE_REALITY && echo "  - VLESS Reality"
+        $ENABLE_SOCKS5 && echo "  - SOCKS5"
     fi
     
     # --- 持久化保持不变 ---
@@ -242,6 +256,7 @@ ENABLE_SS=$ENABLE_SS
 ENABLE_HY2=$ENABLE_HY2
 ENABLE_TUIC=$ENABLE_TUIC
 ENABLE_REALITY=$ENABLE_REALITY
+ENABLE_SOCKS5=$ENABLE_SOCKS5
 EOF
     export ENABLE_SS ENABLE_HY2 ENABLE_TUIC ENABLE_REALITY
 }
@@ -347,6 +362,12 @@ get_config() {
         
     fi
 
+    # --- SOCKS5 ---
+    if $ENABLE_SOCKS5; then
+        PORT_SOCKS5="$FIXED_PORT_SOCKS5"
+        USER_SOCKS5="$FIXED_SOCKS5_USER"
+        PASS_SOCKS5="$FIXED_SOCKS5_PASS"
+    fi
 }
 
 get_config
@@ -582,12 +603,36 @@ INBOUND_TUIC
         }
       }
     }
+
 INBOUND_REALITY
         sed -i "s|PORT_REALITY_PLACEHOLDER|$PORT_REALITY|g" "$TEMP_INBOUNDS"
         sed -i "s|UUID_REALITY_PLACEHOLDER|$UUID|g" "$TEMP_INBOUNDS"
         sed -i "s|REALITY_PK_PLACEHOLDER|$REALITY_PK|g" "$TEMP_INBOUNDS"
         sed -i "s|REALITY_SID_PLACEHOLDER|$REALITY_SID|g" "$TEMP_INBOUNDS"
         sed -i "s|REALITY_SNI_PLACEHOLDER|$REALITY_SNI|g" "$TEMP_INBOUNDS"
+    fi
+
+    if $ENABLE_SOCKS5; then
+        $need_comma && echo "," >> "$TEMP_INBOUNDS"
+        cat >> "$TEMP_INBOUNDS" <<'INBOUND_SOCKS5'
+    {
+    "type": "socks",
+    "tag": "socks-in",
+    "listen": "::",
+    "listen_port": PORT_SOCKS5_PLACEHOLDER,
+    "users": [
+        {
+        "username": "USER_SOCKS5_PLACEHOLDER",
+        "password": "PASS_SOCKS5_PLACEHOLDER"
+        }
+    ]
+    }
+
+INBOUND_SOCKS5
+        sed -i "s|PORT_SOCKS5_PLACEHOLDER|$PORT_SOCKS5|g" "$TEMP_INBOUNDS"
+        sed -i "s|USER_SOCKS5_PLACEHOLDER|$USER_SOCKS5|g" "$TEMP_INBOUNDS"
+        sed -i "s|PASS_SOCKS5_PLACEHOLDER|$PASS_SOCKS5|g" "$TEMP_INBOUNDS"
+        need_comma=true
     fi
 
     # 生成最终配置
@@ -651,6 +696,12 @@ REALITY_PK=$REALITY_PK
 REALITY_SID=$REALITY_SID
 REALITY_PUB=$REALITY_PUB
 REALITY_SNI=$REALITY_SNI
+CACHEEOF
+
+$ENABLE_SOCKS5 && cat >> /etc/sing-box/.config_cache <<CACHEEOF
+SOCKS5_PORT=$PORT_SOCKS5 
+SOCKS5_USER=$USER_SOCKS5 
+SOCKS5_PASS=$PASS_SOCKS5
 CACHEEOF
 
     # 全局写入 CUSTOM_IP（哪怕为空也写）
@@ -827,6 +878,12 @@ generate_uris() {
         echo "vless://${UUID}@${host}:${PORT_REALITY}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality${suffix}"
         echo ""
     fi
+
+    if $ENABLE_SOCKS5; then
+        echo "=== SOCKS5 ==="
+        echo "socks5://${USER_SOCKS5}:${PASS_SOCKS5}@${host}:${PORT_SOCKS5}#socks5${suffix}"
+        echo ""
+    fi
 }
 
 # -----------------------
@@ -893,6 +950,13 @@ report_nodes() {
         curl -s -X POST -H "Content-Type: application/json" -d "$json_data" "$REPORT_URL" >/dev/null || warn "Reality 上报失败"
     fi
     
+    # 5. 上报 SOCKS5
+    if $ENABLE_SOCKS5; then
+        local link="socks5://${USER_SOCKS5}:${PASS_SOCKS5}@${host}:${PORT_SOCKS5}#socks5-${NODE_NAME}"
+        local json_data="{\"name\": \"$NODE_NAME\", \"protocol\": \"socks5\", \"link\": \"$link\"}"
+        info "-> 上报 SOCKS5..."
+        curl -s -X POST -H "Content-Type: application/json" -d "$json_data" "$REPORT_URL" >/dev/null || warn "SOCKS5 上报失败"
+    fi
     info "✅ 上报流程结束"
 }
 
@@ -908,6 +972,7 @@ $ENABLE_SS && echo "   SS 端口: $PORT_SS | 密码: $PSK_SS | 加密: $SS_METHO
 $ENABLE_HY2 && echo "   HY2 端口: $PORT_HY2 | 密码: $PSK_HY2"
 $ENABLE_TUIC && echo "   TUIC 端口: $PORT_TUIC | UUID: $UUID_TUIC | 密码: $PSK_TUIC"
 $ENABLE_REALITY && echo "   Reality 端口: $PORT_REALITY | UUID: $UUID"
+$ENABLE_SOCKS5 && echo "   SOCKS5 端口: $PORT_SOCKS5 | 用户: $USER_SOCKS5 | 密码: $PASS_SOCKS5"
 echo "   服务器: $PUB_IP"
 echo "   Reality server_name(SNI): ${REALITY_SNI:-addons.mozilla.org}"
 echo ""
@@ -1053,6 +1118,12 @@ read_config() {
         REALITY_SID=$(jq -r '.inbounds[] | select(.type=="vless") | .tls.reality.short_id[0] // empty' "$CONFIG_PATH" | head -n1)
         [ -f /etc/sing-box/.reality_pub ] && REALITY_PUB=$(cat /etc/sing-box/.reality_pub)
     fi
+
+    if [ "${ENABLE_SOCKS5:-false}" = "true" ]; then
+        SOCKS5_PORT=$(jq -r '.inbounds[] | select(.type=="socks") | .listen_port // empty' "$CONFIG_PATH" | head -n1)
+        SOCKS5_USER=$(jq -r '.inbounds[] | select(.type=="socks") | .users[0].username // empty' "$CONFIG_PATH" | head -n1)
+        SOCKS5_PASS=$(jq -r '.inbounds[] | select(.type=="socks") | .users[0].password // empty' "$CONFIG_PATH" | head -n1)
+    fi
 }
 
 # 获取公网IP（原始方法）
@@ -1112,7 +1183,13 @@ generate_uris() {
         echo "vless://${REALITY_UUID}@${PUBLIC_IP}:${REALITY_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PUB}&sid=${REALITY_SID}#reality${node_suffix}" >> "$URI_FILE"
         echo "" >> "$URI_FILE"
     fi
-    
+
+    if [ "${ENABLE_SOCKS5:-false}" = "true" ]; then
+        echo "=== SOCKS5 ===" >> "$URI_FILE"
+        echo "socks5://${SOCKS5_USER}:${SOCKS5_PASS}@${PUBLIC_IP}:${SOCKS5_PORT}#socks5${node_suffix}" >> "$URI_FILE"
+        echo "" >> "$URI_FILE"
+    fi
+
     info "URI 已保存到: $URI_FILE"
 }
 
@@ -1252,6 +1329,30 @@ action_reset_reality() {
     ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
     
     info "已启动服务并更新 Reality 端口: $new_port"
+    service_start || warn "启动服务失败"
+    sleep 1
+    generate_uris || warn "生成 URI 失败"
+}
+
+# 重置 SOCKS5 端口
+action_reset_socks5() {
+    read_config || return 1
+    if [ "${ENABLE_SOCKS5:-false}" != "true" ]; then
+        err "SOCKS5 协议未启用"
+        return 1
+    fi
+    read -p "输入新的 SOCKS5 端口(回车保持 $SOCKS5_PORT): " new_port
+    new_port="${new_port:-$SOCKS5_PORT}"
+
+    info "正在停止服务..."
+    service_stop || warn "停止服务失败"
+    cp "$CONFIG_PATH" "${CONFIG_PATH}.bak"
+
+    jq --argjson port "$new_port" '
+    .inbounds |= map(if .type=="socks" then .listen_port = $port else . end)
+    ' "$CONFIG_PATH" > "${CONFIG_PATH}.tmp" && mv "${CONFIG_PATH}.tmp" "$CONFIG_PATH"
+
+    info "已启动服务并更新 SOCKS5 端口: $new_port"
     service_start || warn "启动服务失败"
     sleep 1
     generate_uris || warn "生成 URI 失败"
@@ -1572,7 +1673,13 @@ MENU
         MENU_MAP[$option]="reset_reality"
         option=$((option + 1))
     fi
-    
+
+    if [ "${ENABLE_SOCKS5:-false}" = "true" ]; then
+        echo "$option) 重置 SOCKS5 端口"
+        MENU_MAP[$option]="reset_socks5"
+        option=$((option + 1))
+    fi
+
     # 固定功能选项
     MENU_MAP[$option]="start"
     echo "$option) 启动服务"
@@ -1630,6 +1737,7 @@ while true; do
                 reset_hy2) action_reset_hy2 ;;
                 reset_tuic) action_reset_tuic ;;
                 reset_reality) action_reset_reality ;;
+                reset_socks5) action_reset_socks5 ;;
                 start) service_start && info "已启动" ;;
                 stop) service_stop && info "已停止" ;;
                 restart) service_restart && info "已重启" ;;

@@ -1497,6 +1497,7 @@
         // --- 链接列表 (协议内容) ---
         if (node.links && Object.keys(node.links).length > 0) {
             for (const [proto, link] of Object.entries(node.links)) {
+                const displayName = PROTOCOL_MAP[proto] || proto;
                 // 获取该节点已禁用的协议列表 (如果不存在则为空数组)
                 const disabledList = node.disabled_protocols || []; 
                 const isEnabled = !disabledList.includes(proto); // 如果不在禁用列表中，则为启用

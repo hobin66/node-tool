@@ -514,21 +514,34 @@ def get_nodes_list_api():
     """
     API: 获取节点列表
     修改：调用 merge_db_to_local_json 获取统一列表并按 sort_index 排序
+    新增：过滤掉没有协议链接(links为空)的空节点，不在前端显示
     """
     try:
-        nodes = merge_db_to_local_json() # 获取最新同步数据
-        nodes.sort(key=lambda x: x.get('sort_index', 0)) # 排序
+        all_nodes = merge_db_to_local_json() # 获取最新同步数据
+        all_nodes.sort(key=lambda x: x.get('sort_index', 0)) # 排序
         
-        # 补充前端需要的辅助字段
-        for node in nodes:
-            # is_db 字段方便前端判断图标
+        valid_nodes = []
+        
+        # 遍历节点，补充辅助字段并执行过滤
+        for node in all_nodes:
+            links = node.get('links', {})
+            
+            # [核心修改] 过滤逻辑：如果 links 为空字典或 None，则跳过该节点
+            if not links:
+                continue
+
+            # 补充前端需要的辅助字段
             node['is_db'] = (node.get('origin') == 'db')
             node['is_local'] = (node.get('origin') == 'local')
             node['is_sub'] = (node.get('origin') == 'sub')
-            # 协议列表
-            node['protocols'] = list(node.get('links', {}).keys())
             
-        return jsonify({'status': 'success', 'nodes': nodes})
+            # 生成协议列表供前端展示
+            node['protocols'] = list(links.keys())
+            
+            # 只有通过检查的节点才加入最终列表
+            valid_nodes.append(node)
+            
+        return jsonify({'status': 'success', 'nodes': valid_nodes})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 

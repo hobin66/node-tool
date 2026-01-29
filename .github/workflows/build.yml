@@ -53,8 +53,8 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-          - arch: arm64
-            platform: linux/arm64
+          # - arch: arm64
+          #  platform: linux/arm64
             
     steps:
     - name: Checkout Code
@@ -175,13 +175,13 @@ jobs:
       - name: Prepare Build Context
         run: |
           mkdir -p dist/linux/amd64
-          mkdir -p dist/linux/arm64
+          # mkdir -p dist/linux/arm64
           
           echo "Moving artifacts to build context..."
           # download-artifact v4 会解压到以 artifact 名字命名的文件夹中
           # 将内容复制到目标架构目录
           cp -r download_artifacts/NodeTool-Linux-amd64/* dist/linux/amd64/
-          cp -r download_artifacts/NodeTool-Linux-arm64/* dist/linux/arm64/
+          # cp -r download_artifacts/NodeTool-Linux-arm64/* dist/linux/arm64/
           
           echo "Structure of dist folder:"
           ls -R dist/
@@ -216,7 +216,7 @@ jobs:
           context: .
           file: Dockerfile.publish
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64 #,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # 关闭来源证明，让镜像列表更干净

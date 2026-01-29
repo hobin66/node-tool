@@ -7,6 +7,18 @@
     .container-fluid {
         padding: 20px;
     }
+    /* ... 原有的 proto-badge 样式 ... */
+    
+    /* =========================================
+       新增：被禁用的协议徽章样式 (强制红色)
+       ========================================= */
+    .proto-badge.disabled-proto {
+        background-color: #d74242 !important; /* 红色背景 */
+        color: white !important;               /* 白色文字 */
+        border-color: #b93636 !important;      /* 深红边框 */
+        text-decoration: line-through;         /* (可选) 增加删除线增强视觉提示 */
+        opacity: 0.9;
+    }
     /* =========================================
        新增：协议红绿开关样式
        ========================================= */
@@ -1342,7 +1354,7 @@
         });
     }
 
-    function createNodeElement(node) {
+function createNodeElement(node) {
         const div = document.createElement('div');
         div.className = `node-item`; 
         div.id = `node-${node.uuid}`; 
@@ -1374,15 +1386,32 @@
 
         if (node.protocols && node.protocols.length > 0) {
             headerContent += `<div class="protocol-badges">`;
+            
+            // 获取该节点的禁用列表
+            const disabledList = node.disabled_protocols || [];
+
             node.protocols.forEach(p => {
                 const displayName = PROTOCOL_MAP[p] || p;
                 const protoClass = p.toLowerCase();
+                
+                // 检查是否被禁用
+                const isDisabled = disabledList.includes(p);
+
                 const knownProtos = ['vless', 'vmess', 'trojan', 'ss', 'shadowsocks', 'hy2', 'hysteria2', 'tuic', 'socks5'];
-                const badgeClass = knownProtos.includes(protoClass) ? protoClass : 'other';
-                headerContent += `<span class="proto-badge ${badgeClass}">${displayName}</span>`;
+                
+                // 基础样式
+                let badgeClass = knownProtos.includes(protoClass) ? protoClass : 'other';
+                
+                // 如果被禁用，追加 'disabled-proto' 类
+                if (isDisabled) {
+                    badgeClass += ' disabled-proto';
+                }
+
+                headerContent += `<span class="proto-badge ${badgeClass}" title="${isDisabled ? '此协议已屏蔽' : ''}">${displayName}</span>`;
             });
             headerContent += `</div>`;
         }
+
         headerContent += `</div>`; 
         
         div.innerHTML = headerContent;

@@ -261,8 +261,12 @@ def sync_nodes_to_files():
         node_name = node.get('name', 'Unknown')
         origin = node.get('origin', 'local')
         region = node.get('region')
+        disabled_protos = node.get('disabled_protocols', [])
         
         for proto, link in links.items():
+            if proto in disabled_protos:
+                continue
+
             if link and link.strip():
                 # 命名格式强制调整
                 # 1. 确定国旗
@@ -716,15 +720,18 @@ def rename_local_node_api():
 @bp.route('/api/local_nodes/update_links', methods=['POST'])
 @login_required
 def update_local_node_links_api():
-    """API: 更新链接 (仅限本地节点)"""
+    """API: 更新链接 (仅限本地节点) - 新增处理 disabled_protocols"""
     try:
         data = request.get_json()
-        uuid_val, links = data.get('uuid'), data.get('links')
+        uuid_val = data.get('uuid')
+        links = data.get('links')
+        # 获取前端传来的禁用列表，默认为空
+        disabled_protocols = data.get('disabled_protocols', []) 
+
         local_nodes = load_local_nodes_raw()
         node = next((n for n in local_nodes if n['uuid'] == uuid_val), None)
         
         if not node: return jsonify({'status': 'error', 'message': '节点不存在'}), 404
-        # 防止修改 DB 节点链接
         if node.get('origin') == 'db': return jsonify({'status': 'error', 'message': '数据库节点链接不可在此修改'}), 403
         
         cleaned = {k: v for k, v in links.items() if v and v.strip()}
@@ -733,7 +740,9 @@ def update_local_node_links_api():
             msg = '节点已清空并删除'
         else:
             node['links'] = cleaned
-            msg = '链接已更新'
+            # [新增] 保存禁用列表状态到 JSON
+            node['disabled_protocols'] = disabled_protocols 
+            msg = '链接及状态已更新'
             
         save_local_nodes(local_nodes)
         sync_nodes_to_files()
@@ -891,6 +900,7 @@ def download_v2ray_base64():
         name = node.get('name', 'Unknown')
         origin = node.get('origin', 'local')
         region = node.get('region', 'LOC')
+        disabled_protos = node.get('disabled_protocols', [])
         
         # 增加对类型的图标判断
         # [修改] 增加对类型的图标判断
@@ -902,6 +912,8 @@ def download_v2ray_base64():
         else:
             flag = ''
         for proto, link in links_dict.items():
+            if proto in disabled_protos:
+                continue
             if link and link.strip():
                 # 2. 计算 name_prefix (在协议循环内，使用当前的 proto)
                 name_prefix = ""

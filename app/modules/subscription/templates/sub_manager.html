@@ -7,7 +7,52 @@
     .container-fluid {
         padding: 20px;
     }
+    /* =========================================
+       新增：协议红绿开关样式
+       ========================================= */
+    .proto-switch-label {
+        position: relative;
+        display: inline-block;
+        width: 36px;
+        height: 20px;
+        margin-right: 8px;
+    }
 
+    .proto-switch-input { 
+        opacity: 0; 
+        width: 0; 
+        height: 0; 
+    }
+
+    .proto-switch-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background-color: #d74242; /* 默认红色 (关闭) */
+        transition: .4s;
+        border-radius: 20px;
+    }
+
+    .proto-switch-slider:before {
+        position: absolute;
+        content: "";
+        height: 14px;
+        width: 14px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: .4s;
+        border-radius: 50%;
+    }
+
+    /* 选中状态 (开启/绿色) */
+    .proto-switch-input:checked + .proto-switch-slider {
+        background-color: #34c759;
+    }
+
+    .proto-switch-input:checked + .proto-switch-slider:before {
+        transform: translateX(16px);
+    }
     /* =========================================
        1. 标题栏样式 (复用仪表盘风格 - 50px)
        ========================================= */
@@ -1452,15 +1497,32 @@
         // --- 链接列表 (协议内容) ---
         if (node.links && Object.keys(node.links).length > 0) {
             for (const [proto, link] of Object.entries(node.links)) {
-                const displayName = PROTOCOL_MAP[proto] || proto;
+                // 获取该节点已禁用的协议列表 (如果不存在则为空数组)
+                const disabledList = node.disabled_protocols || []; 
+                const isEnabled = !disabledList.includes(proto); // 如果不在禁用列表中，则为启用
+
                 html += `
                 <div class="detail-row" data-protocol="${proto}">
                     <div class="detail-top">
-                        <span class="detail-proto-name">${displayName}</span>
+                        <div style="display:flex; align-items:center;">
+                            <span class="detail-proto-name" style="margin-right:10px;">${displayName}</span>
+                            ${!isDb ? `
+                                <label class="proto-switch-label" title="开启/关闭此协议">
+                                    <input type="checkbox" class="proto-switch-input" 
+                                        data-protocol="${proto}" 
+                                        ${isEnabled ? 'checked' : ''}>
+                                    <span class="proto-switch-slider"></span>
+                                </label>
+                            ` : ''}
+                        </div>
                         ${!isDb ? `<button class="btn-del-proto" onclick="deleteLocalProtocol('${node.uuid}', '${proto}')">删除协议</button>` : ''}
                     </div>
                     <div class="detail-link-box">
-                        <div class="detail-link" ${!isDb ? 'contenteditable="true"' : ''} id="link-${node.uuid}-${proto}">${link}</div>
+                        <div class="detail-link" ${!isDb ? 'contenteditable="true"' : ''} 
+                            id="link-${node.uuid}-${proto}"
+                            style="${!isEnabled ? 'opacity: 0.5; background: #f0f0f0;' : ''}">
+                            ${link}
+                        </div>
                         <button class="btn-details-copy" onclick="copyText(document.getElementById('link-${node.uuid}-${proto}').innerText.trim())">复制</button>
                     </div>
                 </div>`;
@@ -1564,19 +1626,35 @@
         // 2. 处理链接修改 (仅限本地节点)
         if (node.is_local) {
             const newLinks = {};
+            const disabledProtocols = []; // 新增：用于存储被禁用的协议
+
             const detailRows = detailsContainer.querySelectorAll('.detail-row');
             detailRows.forEach(row => {
                 const protocol = row.dataset.protocol;
+                
+                // 1. 获取链接内容
                 const linkElement = row.querySelector(`#link-${uuid}-${protocol}`);
                 if (linkElement) {
                     newLinks[protocol] = linkElement.innerText.trim();
                 }
+
+                // 2. 获取开关状态 (新增逻辑)
+                const switchInput = row.querySelector(`.proto-switch-input[data-protocol="${protocol}"]`);
+                if (switchInput && !switchInput.checked) {
+                    // 如果开关没被选中，说明用户将其“关闭”了，加入禁用列表
+                    disabledProtocols.push(protocol);
+                }
             });
             
+            // 发送给后端，增加 disabled_protocols 字段
             const updateLinkReq = fetch("{{ url_for('subscription.update_local_node_links_api') }}", {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ uuid: uuid, links: newLinks })
+                body: JSON.stringify({ 
+                    uuid: uuid, 
+                    links: newLinks,
+                    disabled_protocols: disabledProtocols // 传递新字段
+                })
             }).then(r => r.json());
             promises.push(updateLinkReq);
         }

@@ -578,16 +578,16 @@ def _parse_socks5(parsed, params, proxy_name):
     proxy = {
         "name": proxy_name,
         "type": "socks5",
-        "server": server,
+        "server": server.strip('[]'), # 移除 IPv6 的方括号供 IP 查询使用
         "port": port,
-        "udp": True, # Socks5 默认开启 UDP
+        "udp": True,
         "skip-cert-verify": _get_bool(params, ['insecure', 'skip-cert-verify'])
     }
 
     if username: proxy['username'] = username
     if password: proxy['password'] = password
     
-    # Clash Meta 支持 socks5 over TLS (虽然标准 socks5 不带 TLS，但有些实现支持)
+    # Clash Meta 支持 socks5 over TLS
     if _get_bool(params, 'tls'):
         proxy['tls'] = True
         sni = _get_param(params, 'sni')
